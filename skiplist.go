@@ -74,3 +74,46 @@ func (s *SkipList) Insert(key, val []byte) {
 		update[i].fp[i] = node       // Old node points to new node
 	}
 }
+
+func (s *SkipList) Get(key []byte) ([]byte, bool) {
+	cur := s.head
+	for lvl := int(s.height) - 1; lvl >= 0; lvl-- { // Going down
+		for cur.fp[lvl] != nil && s.comparator(cur.fp[lvl].key, key) < 0 { // Going right
+			cur = cur.fp[lvl]
+		}
+	}
+
+	cur = cur.fp[0]
+	if cur == nil || s.comparator(key, cur.key) != 0 {
+		return nil, false
+	}
+	return cur.val, true
+}
+
+func (s *SkipList) Delete(key []byte) bool {
+	updates := make([]*Node, kMaxHeight)
+	cur := s.head
+	for lvl := int(s.height) - 1; lvl >= 0; lvl-- { // Going down
+		for cur.fp[lvl] != nil && s.comparator(cur.fp[lvl].key, key) < 0 { // Going right
+			cur = cur.fp[lvl]
+		}
+		updates[lvl] = cur
+	}
+
+	target := cur.fp[0]
+	if target == nil || s.comparator(target.key, key) != 0 {
+		return false
+	}
+
+	for i := range s.height {
+		if updates[i].fp[i] != target {
+			break
+		}
+		updates[i].fp[i] = target.fp[i]
+	}
+
+	for s.height > 1 && s.head.fp[s.height-1] == nil {
+		s.height--
+	}
+	return true
+}

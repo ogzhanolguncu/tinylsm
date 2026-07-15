@@ -8,5 +8,4 @@ func main() {
 	for _, k := range []string{"5", "2", "8", "1", "9", "3"} {
 		s.Insert([]byte(k), []byte("v"+k))
 	}
-	s.dump()
 }
