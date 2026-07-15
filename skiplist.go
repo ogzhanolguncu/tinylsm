@@ -117,3 +117,46 @@ func (s *SkipList) Delete(key []byte) bool {
 	}
 	return true
 }
+
+type SkipListIterator struct {
+	list   *SkipList
+	cursor *Node
+}
+
+func (s *SkipList) NewIterator() *SkipListIterator {
+	return &SkipListIterator{
+		list:   s,
+		cursor: s.head,
+	}
+}
+
+func (it *SkipListIterator) SeekToFirst() {
+	it.cursor = it.list.head.fp[0]
+}
+
+func (it *SkipListIterator) Valid() bool {
+	return it.cursor != nil
+}
+
+func (it *SkipListIterator) Key() []byte {
+	return it.cursor.key
+}
+
+func (it *SkipListIterator) Value() []byte {
+	return it.cursor.val
+}
+
+func (it *SkipListIterator) Next() {
+	it.cursor = it.cursor.fp[0]
+}
+
+func (it *SkipListIterator) Seek(key []byte) {
+	cur := it.list.head
+	for lvl := int(it.list.height) - 1; lvl >= 0; lvl-- { // Going down
+		for cur.fp[lvl] != nil && it.list.comparator(cur.fp[lvl].key, key) < 0 { // Going right
+			cur = cur.fp[lvl]
+		}
+	}
+
+	it.cursor = cur.fp[0]
+}
