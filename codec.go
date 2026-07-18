@@ -103,6 +103,9 @@ func decode(rec []byte) (Entry, error) {
 
 	seq := binary.LittleEndian.Uint64(payload[offCRC:offSeq])
 	kind := Kind(payload[offSeq])
+	if kind > KindDelete {
+		return Entry{}, ErrMalformed
+	}
 	off := 9
 
 	keyLen, n := binary.Uvarint(payload[off:])

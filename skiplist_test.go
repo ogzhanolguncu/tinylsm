@@ -373,3 +373,25 @@ func BenchmarkIterate(b *testing.B) {
 		}
 	}
 }
+
+// Pins the ownership rule: Insert copies key and val, so callers may reuse
+// their slices afterwards without mutating the skiplist's contents.
+func TestInsertCopiesKeyAndVal(t *testing.T) {
+	s := newList()
+	key := []byte("cat")
+	val := []byte("purr")
+	s.Insert(key, val)
+
+	key[0], val[0] = 'X', 'X' // caller reuses its buffers
+
+	got, ok := s.Get([]byte("cat"))
+	if !ok {
+		t.Fatal("Get(cat): key mutated inside skiplist — Insert did not copy key")
+	}
+	if !bytes.Equal(got, []byte("purr")) {
+		t.Fatalf("Get(cat)=%q, want %q — Insert did not copy val", got, "purr")
+	}
+	if _, ok := s.Get([]byte("Xat")); ok {
+		t.Fatal("Get(Xat) found — skiplist aliases caller's key slice")
+	}
+}

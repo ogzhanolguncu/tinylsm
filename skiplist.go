@@ -77,7 +77,9 @@ func (s *SkipList) Insert(key, val []byte) {
 		}
 	}
 
-	node := &Node{key: key, val: val, fp: make([]atomic.Pointer[Node], h)}
+	// copy key and val so caller can reuse their slices after Insert
+	// without mutating the skiplist's keys or the values Get serves
+	node := &Node{key: append([]byte(nil), key...), val: append([]byte(nil), val...), fp: make([]atomic.Pointer[Node], h)}
 	for i := 0; i < int(h); i++ {
 		node.fp[i].Store(update[i].fp[i].Load()) // New node points to old nodes next position
 		update[i].fp[i].Store(node)              // Old node points to new node

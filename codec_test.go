@@ -125,22 +125,18 @@ func TestIncompleteVarint(t *testing.T) {
 	}
 }
 
-// Pins current behavior: decode is lenient about unknown kind values and
-// leaves interpretation to the layer above. Encode rejects them — asymmetry
-// is deliberate until the kind-range decision is made.
-func TestUnknownKindDecodeLeniency(t *testing.T) {
+// Decode is strict: a kind no encoder produces is corruption, and replaying
+// an operation we don't understand is worse than stopping. Format evolution
+// belongs in a version field, not in tolerated mystery bytes.
+func TestUnknownKindRejected(t *testing.T) {
 	p := binary.LittleEndian.AppendUint64(nil, 7)
 	p = append(p, 0xFF) // kind no encoder would produce
 	p = binary.AppendUvarint(p, 1)
 	p = append(p, 'k')
 	p = binary.AppendUvarint(p, 1)
 	p = append(p, 'v')
-	e, err := decode(frame(p))
-	if err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if e.kind != Kind(0xFF) {
-		t.Errorf("kind = %v, want 0xFF passthrough", e.kind)
+	if _, err := decode(frame(p)); !errors.Is(err, ErrMalformed) {
+		t.Errorf("want ErrMalformed, got %v", err)
 	}
 }
 
