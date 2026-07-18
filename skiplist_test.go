@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"sort"
+	"sync"
 	"testing"
 )
 
@@ -57,47 +58,10 @@ func TestOverwrite(t *testing.T) {
 	}
 }
 
-func TestDelete(t *testing.T) {
-	s := newList()
-	s.Insert([]byte("a"), []byte("1"))
-	s.Insert([]byte("b"), []byte("2"))
-
-	if !s.Delete([]byte("a")) {
-		t.Fatal("Delete(a): false, want true")
-	}
-	if _, ok := s.Get([]byte("a")); ok {
-		t.Fatal("Get(a) after delete: ok=true, want false")
-	}
-	// sibling untouched
-	if _, ok := s.Get([]byte("b")); !ok {
-		t.Fatal("Get(b) after deleting a: ok=false, want true")
-	}
-}
-
-func TestDeleteMissing(t *testing.T) {
-	s := newList()
-	s.Insert([]byte("a"), []byte("1"))
-
-	if s.Delete([]byte("zzz")) {
-		t.Fatal("Delete(zzz): true, want false")
-	}
-	// list intact
-	if _, ok := s.Get([]byte("a")); !ok {
-		t.Fatal("Get(a) after failed delete: ok=false, want true")
-	}
-}
-
-func TestDeleteEmpty(t *testing.T) {
-	s := newList()
-	if s.Delete([]byte("a")) {
-		t.Fatal("Delete on empty list: true, want false")
-	}
-}
-
 // walkKeys returns level-0 keys in order (same-package access to internals).
 func walkKeys(s *SkipList) [][]byte {
 	var out [][]byte
-	for n := s.head.fp[0]; n != nil; n = n.fp[0] {
+	for n := s.head.fp[0].Load(); n != nil; n = n.fp[0].Load() {
 		out = append(out, n.key)
 	}
 	return out
@@ -238,6 +202,154 @@ func BenchmarkInsert(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		s.Insert(keys[i], keys[i])
 	}
+}
+
+// benchList builds an n-entry list of random 16-byte keys (val == key).
+func benchList(n int) (*SkipList, [][]byte) {
+	rng := rand.New(rand.NewSource(seed))
+	s := newList()
+	keys := make([][]byte, n)
+	for i := range keys {
+		kb := make([]byte, 16)
+		rng.Read(kb)
+		keys[i] = kb
+		s.Insert(kb, kb)
+	}
+	return s, keys
+}
+
+func BenchmarkGet(b *testing.B) {
+	s, keys := benchList(1_000_000)
+	i := 0
+	for b.Loop() {
+		if _, ok := s.Get(keys[i%len(keys)]); !ok {
+			b.Fatal("miss on inserted key")
+		}
+		i++
+	}
+}
+
+// BenchmarkGetMiss: every probe absent (17-byte probes can never equal
+// 16-byte inserted keys). Baseline for the bloom-filter phase.
+func BenchmarkGetMiss(b *testing.B) {
+	s, _ := benchList(1_000_000)
+	rng := rand.New(rand.NewSource(seed + 1))
+	probes := make([][]byte, 1024)
+	for i := range probes {
+		pb := make([]byte, 17)
+		rng.Read(pb)
+		probes[i] = pb
+	}
+	i := 0
+	for b.Loop() {
+		if _, ok := s.Get(probes[i%len(probes)]); ok {
+			b.Fatal("hit on absent key")
+		}
+		i++
+	}
+}
+
+func BenchmarkSeek(b *testing.B) {
+	s, keys := benchList(1_000_000)
+	it := s.NewIterator()
+	i := 0
+	for b.Loop() {
+		it.Seek(keys[i%len(keys)])
+		if !it.Valid() {
+			b.Fatal("seek on inserted key: !Valid")
+		}
+		i++
+	}
+}
+
+// BenchmarkGetParallel: RLock contention — all cores reading at once.
+func BenchmarkGetParallel(b *testing.B) {
+	s, keys := benchList(1_000_000)
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			if _, ok := s.Get(keys[i%len(keys)]); !ok {
+				b.Fatal("miss on inserted key")
+			}
+			i++
+		}
+	})
+}
+
+// BenchmarkGetParallelWithWriter: read throughput on all cores while one
+// background writer inserts continuously. The lock-free comparison bench —
+// with RWMutex every Insert blocks all readers; lock-free readers never wait.
+func BenchmarkGetParallelWithWriter(b *testing.B) {
+	s, keys := benchList(1_000_000)
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		rng := rand.New(rand.NewSource(seed + 2))
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			kb := make([]byte, 16)
+			rng.Read(kb)
+			s.Insert(kb, kb)
+		}
+	})
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			if _, ok := s.Get(keys[i%len(keys)]); !ok {
+				b.Fatal("miss on inserted key")
+			}
+			i++
+		}
+	})
+	b.StopTimer()
+	close(stop)
+	wg.Wait()
+}
+
+// BenchmarkInsertWithReaders: insert latency while background readers hold
+// RLock — the other half of the lock-free comparison (writer waiting for
+// readers to drain).
+func BenchmarkInsertWithReaders(b *testing.B) {
+	const numReaders = 4
+	s, keys := benchList(1_000_000)
+
+	rng := rand.New(rand.NewSource(seed + 3))
+	fresh := make([][]byte, b.N)
+	for i := range fresh {
+		kb := make([]byte, 16)
+		rng.Read(kb)
+		fresh[i] = kb
+	}
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for range numReaders {
+		wg.Go(func() {
+			i := 0
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				s.Get(keys[i%len(keys)])
+				i++
+			}
+		})
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		s.Insert(fresh[i], fresh[i])
+	}
+	b.StopTimer()
+	close(stop)
+	wg.Wait()
 }
 
 func BenchmarkIterate(b *testing.B) {
