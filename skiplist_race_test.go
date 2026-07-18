@@ -7,6 +7,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestConcurrentReadersOneWriter: one writer inserting distinct random keys
@@ -16,6 +19,9 @@ import (
 // The writer publishes its progress through an atomic counter; a reader that
 // observes published=n is guaranteed (atomic store happens-after the insert)
 // to find keys[0:n] in the list.
+//
+// Goroutines use assert (not require): require.FailNow must only run on the
+// test goroutine.
 func TestConcurrentReadersOneWriter(t *testing.T) {
 	const (
 		numKeys    = 50_000
@@ -58,12 +64,10 @@ func TestConcurrentReadersOneWriter(t *testing.T) {
 				}
 				k := keys[rng.Int63n(n)]
 				got, ok := s.Get(k)
-				if !ok {
-					t.Errorf("Get(%q): missing after writer published it", k)
+				if !assert.Truef(t, ok, "Get(%q): missing after writer published it", k) {
 					return
 				}
-				if !bytes.Equal(got, k) {
-					t.Errorf("Get(%q)=%q, want key itself", k, got)
+				if !assert.Equalf(t, string(k), string(got), "Get(%q): want key itself", k) {
 					return
 				}
 			}
@@ -86,8 +90,8 @@ func TestConcurrentReadersOneWriter(t *testing.T) {
 			}
 			k := keys[rng.Int63n(n)]
 			it.Seek(k)
-			if !it.Valid() || !bytes.Equal(it.Key(), k) {
-				t.Errorf("Seek(%q): cursor not on key after writer published it", k)
+			if !assert.Truef(t, it.Valid() && bytes.Equal(it.Key(), k),
+				"Seek(%q): cursor not on key after writer published it", k) {
 				return
 			}
 		}
@@ -107,8 +111,8 @@ func TestConcurrentReadersOneWriter(t *testing.T) {
 			prev = prev[:0]
 			for it.SeekToFirst(); it.Valid(); it.Next() {
 				k := it.Key()
-				if len(prev) > 0 && bytes.Compare(prev, k) >= 0 {
-					t.Errorf("concurrent walk not ascending: %q then %q", prev, k)
+				if len(prev) > 0 && !assert.Lessf(t, bytes.Compare(prev, k), 0,
+					"concurrent walk not ascending: %q then %q", prev, k) {
 					return
 				}
 				prev = append(prev[:0], k...)
@@ -121,23 +125,21 @@ func TestConcurrentReadersOneWriter(t *testing.T) {
 	// final oracle: every key present, full walk strictly sorted, exact count
 	for _, k := range keys {
 		got, ok := s.Get(k)
-		if !ok || !bytes.Equal(got, k) {
-			t.Fatalf("final Get(%q)=%q ok=%v, want key itself", k, got, ok)
-		}
+		require.Truef(t, ok, "final Get(%q)", k)
+		require.Equalf(t, string(k), string(got), "final Get(%q): want key itself", k)
 	}
 	it := s.NewIterator()
 	count := 0
 	var prev []byte
 	for it.SeekToFirst(); it.Valid(); it.Next() {
-		if len(prev) > 0 && bytes.Compare(prev, it.Key()) >= 0 {
-			t.Fatalf("final walk not ascending at %d: %q then %q", count, prev, it.Key())
+		if len(prev) > 0 {
+			require.Lessf(t, bytes.Compare(prev, it.Key()), 0,
+				"final walk not ascending at %d: %q then %q", count, prev, it.Key())
 		}
 		prev = append(prev[:0], it.Key()...)
 		count++
 	}
-	if count != numKeys {
-		t.Fatalf("final walk count=%d, want %d", count, numKeys)
-	}
+	require.Equal(t, numKeys, count, "final walk count")
 }
 
 // TestMillionInserts: 1M random-order inserts, full iteration strictly
@@ -161,21 +163,16 @@ func TestMillionInserts(t *testing.T) {
 	i := 0
 	for it.SeekToFirst(); it.Valid(); it.Next() {
 		want := fmt.Appendf(nil, "key%08d", i)
-		if !bytes.Equal(it.Key(), want) {
-			t.Fatalf("walk[%d] key=%q, want %q", i, it.Key(), want)
-		}
+		require.Equalf(t, string(want), string(it.Key()), "walk[%d] key", i)
 		i++
 	}
-	if i != n {
-		t.Fatalf("walk yielded %d entries, want %d", i, n)
-	}
+	require.Equal(t, n, i, "walk entry count")
 
 	// spot-check Gets across the range
 	for j := 0; j < n; j += 997 {
 		k := fmt.Appendf(nil, "key%08d", j)
 		got, ok := s.Get(k)
-		if !ok || !bytes.Equal(got, k) {
-			t.Fatalf("Get(%q)=%q ok=%v, want key itself", k, got, ok)
-		}
+		require.Truef(t, ok, "Get(%q)", k)
+		require.Equalf(t, string(k), string(got), "Get(%q): want key itself", k)
 	}
 }

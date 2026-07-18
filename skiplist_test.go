@@ -7,6 +7,8 @@ import (
 	"sort"
 	"sync"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 const seed = 42
@@ -20,28 +22,22 @@ func TestInsertGet(t *testing.T) {
 	s.Insert([]byte("foo"), []byte("bar"))
 
 	got, ok := s.Get([]byte("foo"))
-	if !ok {
-		t.Fatal("Get(foo): ok=false, want true")
-	}
-	if !bytes.Equal(got, []byte("bar")) {
-		t.Fatalf("Get(foo)=%q, want %q", got, "bar")
-	}
+	require.True(t, ok, "Get(foo)")
+	require.Equal(t, "bar", string(got))
 }
 
 func TestGetMissing(t *testing.T) {
 	s := newList()
 	s.Insert([]byte("foo"), []byte("bar"))
 
-	if _, ok := s.Get([]byte("nope")); ok {
-		t.Fatal("Get(nope): ok=true, want false")
-	}
+	_, ok := s.Get([]byte("nope"))
+	require.False(t, ok, "Get(nope)")
 }
 
 func TestGetEmpty(t *testing.T) {
 	s := newList()
-	if _, ok := s.Get([]byte("foo")); ok {
-		t.Fatal("Get on empty list: ok=true, want false")
-	}
+	_, ok := s.Get([]byte("foo"))
+	require.False(t, ok, "Get on empty list")
 }
 
 func TestOverwrite(t *testing.T) {
@@ -50,12 +46,8 @@ func TestOverwrite(t *testing.T) {
 	s.Insert([]byte("k"), []byte("v2"))
 
 	got, ok := s.Get([]byte("k"))
-	if !ok {
-		t.Fatal("Get(k): ok=false, want true")
-	}
-	if !bytes.Equal(got, []byte("v2")) {
-		t.Fatalf("Get(k)=%q, want latest %q", got, "v2")
-	}
+	require.True(t, ok, "Get(k)")
+	require.Equal(t, "v2", string(got), "want latest value")
 }
 
 // walkKeys returns level-0 keys in order (same-package access to internals).
@@ -76,9 +68,8 @@ func TestSortedOrder(t *testing.T) {
 
 	keys := walkKeys(s)
 	for i := 1; i < len(keys); i++ {
-		if bytes.Compare(keys[i-1], keys[i]) >= 0 {
-			t.Fatalf("not sorted at %d: %q then %q", i, keys[i-1], keys[i])
-		}
+		require.Lessf(t, bytes.Compare(keys[i-1], keys[i]), 0,
+			"not sorted at %d: %q then %q", i, keys[i-1], keys[i])
 	}
 }
 
@@ -92,13 +83,10 @@ func TestManyInserts(t *testing.T) {
 	for i := range n {
 		k := fmt.Appendf(nil, "key%05d", i)
 		got, ok := s.Get(k)
-		if !ok || !bytes.Equal(got, k) {
-			t.Fatalf("Get(%q)=%q ok=%v, want %q true", k, got, ok, k)
-		}
+		require.Truef(t, ok, "Get(%q)", k)
+		require.Equalf(t, string(k), string(got), "Get(%q)", k)
 	}
-	if len(walkKeys(s)) != n {
-		t.Fatalf("level-0 count=%d, want %d", len(walkKeys(s)), n)
-	}
+	require.Len(t, walkKeys(s), n, "level-0 count")
 }
 
 // TestIterator_Oracle: skiplist iterator vs a map+sorted-slice oracle.
@@ -131,37 +119,24 @@ func TestIterator_Oracle(t *testing.T) {
 	i := 0
 	var prev []byte
 	for it.SeekToFirst(); it.Valid(); it.Next() {
-		if i >= len(sorted) {
-			t.Fatalf("iterator yielded more than %d entries", len(sorted))
+		require.Lessf(t, i, len(sorted), "iterator yielded more than %d entries", len(sorted))
+		if prev != nil {
+			require.Lessf(t, bytes.Compare(prev, it.Key()), 0,
+				"not strictly ascending at %d: %q then %q", i, prev, it.Key())
 		}
-		if prev != nil && bytes.Compare(prev, it.Key()) >= 0 {
-			t.Fatalf("not strictly ascending at %d: %q then %q", i, prev, it.Key())
-		}
-		if want := sorted[i]; string(it.Key()) != want {
-			t.Fatalf("walk[%d] key=%q, want %q", i, it.Key(), want)
-		}
-		if want := oracle[sorted[i]]; !bytes.Equal(it.Value(), want) {
-			t.Fatalf("walk[%d] val=%q, want %q", i, it.Value(), want)
-		}
+		require.Equalf(t, sorted[i], string(it.Key()), "walk[%d] key", i)
+		require.Equalf(t, string(oracle[sorted[i]]), string(it.Value()), "walk[%d] val", i)
 		prev = append(prev[:0], it.Key()...)
 		i++
 	}
-	if i != len(sorted) {
-		t.Fatalf("walk yielded %d entries, want %d", i, len(sorted))
-	}
+	require.Equal(t, len(sorted), i, "walk entry count")
 
 	// 2. exact-match Seek lands on the key, value matches.
 	for k, v := range oracle {
 		it.Seek([]byte(k))
-		if !it.Valid() {
-			t.Fatalf("Seek(%q): !Valid, want hit", k)
-		}
-		if string(it.Key()) != k {
-			t.Fatalf("Seek(%q) landed on %q", k, it.Key())
-		}
-		if !bytes.Equal(it.Value(), v) {
-			t.Fatalf("Seek(%q) val=%q, want %q", k, it.Value(), v)
-		}
+		require.Truef(t, it.Valid(), "Seek(%q): want hit", k)
+		require.Equalf(t, k, string(it.Key()), "Seek(%q) landing key", k)
+		require.Equalf(t, string(v), string(it.Value()), "Seek(%q) val", k)
 	}
 
 	// 3. between-keys Seek: probe absent keys, expect first entry >= probe.
@@ -175,17 +150,11 @@ func TestIterator_Oracle(t *testing.T) {
 
 		it.Seek(pb)
 		if idx == len(sorted) {
-			if it.Valid() {
-				t.Fatalf("Seek(%q): Valid=%q, want past-end", probe, it.Key())
-			}
+			require.Falsef(t, it.Valid(), "Seek(%q): want past-end", probe)
 			continue
 		}
-		if !it.Valid() {
-			t.Fatalf("Seek(%q): !Valid, want %q", probe, sorted[idx])
-		}
-		if string(it.Key()) != sorted[idx] {
-			t.Fatalf("Seek(%q) landed on %q, want %q", probe, it.Key(), sorted[idx])
-		}
+		require.Truef(t, it.Valid(), "Seek(%q): want %q", probe, sorted[idx])
+		require.Equalf(t, sorted[idx], string(it.Key()), "Seek(%q) landing key", probe)
 	}
 }
 
@@ -385,13 +354,9 @@ func TestInsertCopiesKeyAndVal(t *testing.T) {
 	key[0], val[0] = 'X', 'X' // caller reuses its buffers
 
 	got, ok := s.Get([]byte("cat"))
-	if !ok {
-		t.Fatal("Get(cat): key mutated inside skiplist — Insert did not copy key")
-	}
-	if !bytes.Equal(got, []byte("purr")) {
-		t.Fatalf("Get(cat)=%q, want %q — Insert did not copy val", got, "purr")
-	}
-	if _, ok := s.Get([]byte("Xat")); ok {
-		t.Fatal("Get(Xat) found — skiplist aliases caller's key slice")
-	}
+	require.True(t, ok, "key mutated inside skiplist — Insert did not copy key")
+	require.Equal(t, "purr", string(got), "Insert did not copy val")
+
+	_, ok = s.Get([]byte("Xat"))
+	require.False(t, ok, "skiplist aliases caller's key slice")
 }

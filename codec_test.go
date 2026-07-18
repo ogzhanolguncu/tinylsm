@@ -3,9 +3,10 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
 	"hash/crc32"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestRoundtrip(t *testing.T) {
@@ -28,21 +29,11 @@ func TestRoundtrip(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := mustEncode(t, tc.key, tc.val, tc.seq, tc.kind)
 			e, err := decode(rec)
-			if err != nil {
-				t.Fatalf("decode: %v", err)
-			}
-			if !bytes.Equal(e.key, tc.key) {
-				t.Errorf("key = %q, want %q", e.key, tc.key)
-			}
-			if !bytes.Equal(e.value, tc.val) {
-				t.Errorf("value = %q, want %q", e.value, tc.val)
-			}
-			if e.seq != tc.seq {
-				t.Errorf("seq = %d, want %d", e.seq, tc.seq)
-			}
-			if e.kind != tc.kind {
-				t.Errorf("kind = %#x, want %#x", e.kind, tc.kind)
-			}
+			require.NoError(t, err, "decode")
+			require.Equal(t, string(tc.key), string(e.key), "key")
+			require.Equal(t, string(tc.val), string(e.value), "value")
+			require.Equal(t, tc.seq, e.seq, "seq")
+			require.Equal(t, tc.kind, e.kind, "kind")
 		})
 	}
 }
@@ -52,9 +43,8 @@ func TestRoundtrip(t *testing.T) {
 func TestTruncatedPrefixes(t *testing.T) {
 	rec := mustEncode(t, []byte("cat"), []byte("purr"), 7, KindPut)
 	for i := 0; i < len(rec); i++ {
-		if _, err := decode(rec[:i]); err == nil {
-			t.Errorf("decode(rec[:%d]): want error, got nil", i)
-		}
+		_, err := decode(rec[:i])
+		require.Errorf(t, err, "decode(rec[:%d])", i)
 	}
 }
 
@@ -63,12 +53,9 @@ func TestTrailingBytesIgnored(t *testing.T) {
 	rec := mustEncode(t, []byte("cat"), []byte("purr"), 7, KindPut)
 	buf := append(append([]byte{}, rec...), []byte("garbage that is really the next record")...)
 	e, err := decode(buf)
-	if err != nil {
-		t.Fatalf("decode with trailing bytes: %v", err)
-	}
-	if !bytes.Equal(e.key, []byte("cat")) || !bytes.Equal(e.value, []byte("purr")) {
-		t.Errorf("entry = %q/%q, want cat/purr", e.key, e.value)
-	}
+	require.NoError(t, err, "decode with trailing bytes")
+	require.Equal(t, "cat", string(e.key))
+	require.Equal(t, "purr", string(e.value))
 }
 
 // Flip each byte in turn: every flip must be rejected. Flips inside the
@@ -79,12 +66,9 @@ func TestSingleBitCorruption(t *testing.T) {
 		rec := append([]byte{}, orig...)
 		rec[i] ^= 0xFF
 		_, err := decode(rec)
-		if err == nil {
-			t.Errorf("byte %d flipped: want error, got nil", i)
-			continue
-		}
-		if i >= headerSize && !errors.Is(err, ErrChecksum) {
-			t.Errorf("payload byte %d flipped: want ErrChecksum, got %v", i, err)
+		require.Errorf(t, err, "byte %d flipped: want error", i)
+		if i >= headerSize {
+			require.ErrorIsf(t, err, ErrChecksum, "payload byte %d flipped", i)
 		}
 	}
 }
@@ -96,9 +80,8 @@ func TestLengthLiesSmall(t *testing.T) {
 	rec := mustEncode(t, []byte("cat"), []byte("purr"), 7, KindPut)
 	binary.LittleEndian.PutUint32(rec[offLen:offSeq], 5)
 	binary.LittleEndian.PutUint32(rec[offCRC:offLen], crc32.Checksum(rec[headerSize:headerSize+5], Castagnoli))
-	if _, err := decode(rec); !errors.Is(err, ErrMalformed) {
-		t.Errorf("want ErrMalformed, got %v", err)
-	}
+	_, err := decode(rec)
+	require.ErrorIs(t, err, ErrMalformed)
 }
 
 // keyLen claims more bytes than the payload holds, checksum valid.
@@ -107,10 +90,8 @@ func TestKeyLenLies(t *testing.T) {
 	p = append(p, byte(KindPut))
 	p = binary.AppendUvarint(p, 200) // keyLen claims 200...
 	p = append(p, 'x')               // ...one byte follows
-	rec := frame(p)
-	if _, err := decode(rec); !errors.Is(err, ErrMalformed) {
-		t.Errorf("want ErrMalformed, got %v", err)
-	}
+	_, err := decode(frame(p))
+	require.ErrorIs(t, err, ErrMalformed)
 }
 
 // Payload ends in the middle of a varint (continuation bit set, no
@@ -119,10 +100,8 @@ func TestIncompleteVarint(t *testing.T) {
 	p := binary.LittleEndian.AppendUint64(nil, 7)
 	p = append(p, byte(KindPut))
 	p = append(p, 0x80, 0x80) // varint never terminates
-	rec := frame(p)
-	if _, err := decode(rec); !errors.Is(err, ErrMalformed) {
-		t.Errorf("want ErrMalformed, got %v", err)
-	}
+	_, err := decode(frame(p))
+	require.ErrorIs(t, err, ErrMalformed)
 }
 
 // Decode is strict: a kind no encoder produces is corruption, and replaying
@@ -135,24 +114,20 @@ func TestUnknownKindRejected(t *testing.T) {
 	p = append(p, 'k')
 	p = binary.AppendUvarint(p, 1)
 	p = append(p, 'v')
-	if _, err := decode(frame(p)); !errors.Is(err, ErrMalformed) {
-		t.Errorf("want ErrMalformed, got %v", err)
-	}
+	_, err := decode(frame(p))
+	require.ErrorIs(t, err, ErrMalformed)
 }
 
 // Tombstones must not carry a value; encode is the write-side gate.
 func TestEncodeRejectsTombstoneWithValue(t *testing.T) {
-	if _, err := encode([]byte("cat"), []byte("oops"), 7, KindDelete); !errors.Is(err, ErrInvalidInput) {
-		t.Errorf("want ErrInvalidInput, got %v", err)
-	}
+	_, err := encode([]byte("cat"), []byte("oops"), 7, KindDelete)
+	require.ErrorIs(t, err, ErrInvalidInput)
 }
 
 func mustEncode(t *testing.T, key, val []byte, seq uint64, kind Kind) []byte {
 	t.Helper()
 	rec, err := encode(key, val, seq, kind)
-	if err != nil {
-		t.Fatalf("encode: %v", err)
-	}
+	require.NoError(t, err, "encode")
 	return rec
 }
 
@@ -184,20 +159,15 @@ func FuzzRoundtrip(f *testing.F) {
 		kind := Kind(kindByte % 2) // only legal kinds reach encode
 		rec, err := encode(key, val, seq, kind)
 		if kind == KindDelete && len(val) > 0 {
-			if !errors.Is(err, ErrInvalidInput) {
-				t.Fatalf("tombstone with value: want ErrInvalidInput, got %v", err)
-			}
+			require.ErrorIs(t, err, ErrInvalidInput, "tombstone with value")
 			return
 		}
-		if err != nil {
-			t.Fatalf("encode: %v", err)
-		}
+		require.NoError(t, err, "encode")
 		e, err := decode(rec)
-		if err != nil {
-			t.Fatalf("decode of freshly encoded record: %v", err)
-		}
-		if !bytes.Equal(e.key, key) || !bytes.Equal(e.value, val) || e.seq != seq || e.kind != kind {
-			t.Fatalf("roundtrip mismatch: got %q/%q/%d/%v", e.key, e.value, e.seq, e.kind)
-		}
+		require.NoError(t, err, "decode of freshly encoded record")
+		require.Equal(t, string(key), string(e.key), "key")
+		require.Equal(t, string(val), string(e.value), "value")
+		require.Equal(t, seq, e.seq, "seq")
+		require.Equal(t, kind, e.kind, "kind")
 	})
 }
