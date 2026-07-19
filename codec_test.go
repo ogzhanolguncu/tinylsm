@@ -78,7 +78,7 @@ func TestSingleBitCorruption(t *testing.T) {
 // the structural guard — not the checksum — must reject it.
 func TestLengthLiesSmall(t *testing.T) {
 	rec := mustEncode(t, []byte("cat"), []byte("purr"), 7, KindPut)
-	binary.LittleEndian.PutUint32(rec[offLen:offSeq], 5)
+	binary.LittleEndian.PutUint32(rec[offLen:headerSize], 5)
 	binary.LittleEndian.PutUint32(rec[offCRC:offLen], crc32.Checksum(rec[headerSize:headerSize+5], Castagnoli))
 	_, err := decode(rec)
 	require.ErrorIs(t, err, ErrMalformed)

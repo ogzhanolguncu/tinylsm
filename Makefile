@@ -9,6 +9,9 @@ run:
 	go run .
 
 test:
+	go test ./...
+
+test-race:
 	go test -race ./...
 
 cover:

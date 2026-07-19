@@ -14,20 +14,19 @@ var (
 	ErrInvalidInput = errors.New("wal: invalid input")
 )
 
-const minRecordSize = offKeyLen + 2 // two 1-byte varints: keyLen=0, valLen=0
-
 const (
-	offCRC    = 0           // uint32, 4 bytes
-	offLen    = offCRC + 4  // uint32, 4 bytes
-	offSeq    = offLen + 4  // uint64, 8 bytes  (payload starts here)
-	offKind   = offSeq + 8  // byte,   1 byte
-	offKeyLen = offKind + 1 // varint begins — last fixed offset (= 17)
+	// frame offsets — crc + len header, not covered by CRC
+	offCRC     = 0          // uint32, 4 bytes
+	offLen     = offCRC + 4 // uint32, 4 bytes
+	headerSize = offLen + 4 // payload starts here (= 8)
 
-	headerSize = offSeq // crc+len; not covered by CRC (= 8)
-	seqSize    = offKind - offSeq // 8
-	kindSize   = offKeyLen - offKind
-
+	// payload-relative offsets — CRC covers all of payload
+	pOffSeq    = 0            // uint64, 8 bytes
+	pOffKind   = pOffSeq + 8  // byte,   1 byte
+	pOffKeyLen = pOffKind + 1 // varint begins — last fixed offset (= 9)
 )
+
+const minRecordSize = headerSize + pOffKeyLen + 2 // two 1-byte varints: keyLen=0, valLen=0
 
 var Castagnoli = crc32.MakeTable(crc32.Castagnoli)
 
@@ -57,7 +56,7 @@ func encode(key, value []byte, seq uint64, kind Kind) ([]byte, error) {
 		return nil, ErrInvalidInput
 	}
 
-	p := make([]byte, 0, seqSize+kindSize+sizeUvarint(uint64(len(key)))+len(key)+sizeUvarint(uint64(len(value)))+len(value))
+	p := make([]byte, 0, pOffKeyLen+sizeUvarint(uint64(len(key)))+len(key)+sizeUvarint(uint64(len(value)))+len(value))
 	p = binary.LittleEndian.AppendUint64(p, seq)
 	p = append(p, byte(kind))
 	p = binary.AppendUvarint(p, uint64(len(key)))
@@ -81,13 +80,17 @@ type Entry struct {
 	kind       Kind
 }
 
+// decode parses one framed record from rec
+// zero-copy, Entry.key and Entry.value alias rec's memory.
+// They are valid only until caller modifies or reuses rec
+// Callers that retain the Entry should copy to be safe
 func decode(rec []byte) (Entry, error) {
 	if len(rec) < minRecordSize {
 		return Entry{}, ErrTruncated
 	}
 
 	crc := binary.LittleEndian.Uint32(rec[offCRC:offLen])
-	length := binary.LittleEndian.Uint32(rec[offLen:offSeq])
+	length := binary.LittleEndian.Uint32(rec[offLen:headerSize])
 
 	if int(length) < minRecordSize-headerSize {
 		return Entry{}, ErrMalformed
@@ -101,12 +104,12 @@ func decode(rec []byte) (Entry, error) {
 		return Entry{}, ErrChecksum
 	}
 
-	seq := binary.LittleEndian.Uint64(payload[offCRC:offSeq])
-	kind := Kind(payload[offSeq])
+	seq := binary.LittleEndian.Uint64(payload[pOffSeq:pOffKind])
+	kind := Kind(payload[pOffKind])
 	if kind > KindDelete {
 		return Entry{}, ErrMalformed
 	}
-	off := 9
+	off := pOffKeyLen
 
 	keyLen, n := binary.Uvarint(payload[off:])
 	if n <= 0 {
