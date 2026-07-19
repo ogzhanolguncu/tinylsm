@@ -118,6 +118,18 @@ func TestUnknownKindRejected(t *testing.T) {
 	require.ErrorIs(t, err, ErrMalformed)
 }
 
+// valid fields, then junk bytes no field accounts for.
+// CRC covers the junk too, so the checksum passes — only the "payload fully
+// consumed" guard can reject it. Without that guard decode would also return
+// a consumed count smaller than the frame, desyncing the reader's walk.
+func TestPayloadSlackRejected(t *testing.T) {
+	p, err := buildPayload(Entry{key: []byte("cat"), value: []byte("purr"), seq: 7, kind: KindPut})
+	require.NoError(t, err)
+	p = append(p, 0xDE, 0xAD, 0xBE, 0xEF) // slack no field accounts for
+	_, _, err = decode(frame(p))
+	require.ErrorIs(t, err, ErrMalformed)
+}
+
 // The consumed count is what the reader uses to find record N+1: decode
 // record, advance by n, decode again. If n is short (e.g. payload length
 // without the crc+len header), the second decode lands mid-record.
@@ -150,14 +162,6 @@ func mustEncode(t *testing.T, key, val []byte, seq uint64, kind Kind) []byte {
 	rec, err := encode(Entry{key: key, value: val, seq: seq, kind: kind})
 	require.NoError(t, err, "encode")
 	return rec
-}
-
-// frame wraps a hand-built payload with a valid crc+len header, so tests
-// can craft structurally-broken payloads that pass the checksum.
-func frame(p []byte) []byte {
-	rec := binary.LittleEndian.AppendUint32(nil, crc32.Checksum(p, Castagnoli))
-	rec = binary.LittleEndian.AppendUint32(rec, uint32(len(p)))
-	return append(rec, p...)
 }
 
 // Decode must never panic, whatever bytes arrive.

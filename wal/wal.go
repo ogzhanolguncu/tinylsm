@@ -84,44 +84,43 @@ func Replay(path string) ([]Entry, error) {
 
 	var entries []Entry
 	off := 0
+	fileEnd := len(data)
 
-	torn := func() ([]Entry, error) {
+	// A crash can only ever break the FINAL record: the writer is append-only,
+	// fsyncs every record, and never writes again after a failure.
+	dropBrokenTail := func() ([]Entry, error) {
 		if err := truncateAndFsync(path, off); err != nil {
 			return nil, err
 		}
-		log.Printf("wal: torn tail in %s at offset %d, truncated", path, off)
+		log.Printf("wal: dropped broken tail of %s at offset %d", path, off)
 		return entries, nil
 	}
 
-	for off < len(data) {
-		rem := len(data) - off
-
-		if rem < headerSize {
-			return torn() // data is short
-		}
-
+	for off < fileEnd {
 		size, ok := frameSize(data[off:])
 		if !ok {
-			return torn() // header is short
+			return dropBrokenTail() // not even a full header left
 		}
 
 		frameEnd := off + size
-		if frameEnd > len(data) {
-			return torn() // frame extends EOF
+		if frameEnd > fileEnd {
+			return dropBrokenTail() // record cut short by crash
 		}
 
 		e, n, err := decode(data[off:])
 		if err != nil {
-			if frameEnd == len(data) {
-				return torn()
+			brokenRecordIsLast := frameEnd == fileEnd
+			if brokenRecordIsLast {
+				return dropBrokenTail() // crash broke the final record
 			}
+			// broken record mid file
 			return nil, fmt.Errorf("replay: corrupt record at offset %d: %w", off, err)
 		}
 
 		entries = append(entries, e)
 		off += n
 	}
-	return entries, nil
+	return entries, nil // case 1: clean EOF, every record accounted for
 }
 
 func truncateAndFsync(path string, off int) error {
