@@ -1,4 +1,4 @@
-package main
+package wal
 
 import (
 	"bytes"
@@ -120,13 +120,13 @@ func TestUnknownKindRejected(t *testing.T) {
 
 // Tombstones must not carry a value; encode is the write-side gate.
 func TestEncodeRejectsTombstoneWithValue(t *testing.T) {
-	_, err := encode([]byte("cat"), []byte("oops"), 7, KindDelete)
+	_, err := encode(Entry{key: []byte("cat"), value: []byte("oops"), seq: 7, kind: KindDelete})
 	require.ErrorIs(t, err, ErrInvalidInput)
 }
 
 func mustEncode(t *testing.T, key, val []byte, seq uint64, kind Kind) []byte {
 	t.Helper()
-	rec, err := encode(key, val, seq, kind)
+	rec, err := encode(Entry{key: key, value: val, seq: seq, kind: kind})
 	require.NoError(t, err, "encode")
 	return rec
 }
@@ -142,7 +142,7 @@ func frame(p []byte) []byte {
 // Decode must never panic, whatever bytes arrive.
 func FuzzDecode(f *testing.F) {
 	f.Add([]byte{})
-	if rec, err := encode([]byte("cat"), []byte("purr"), 7, KindPut); err == nil {
+	if rec, err := encode(Entry{key: []byte("cat"), value: []byte("purr"), seq: 7, kind: KindPut}); err == nil {
 		f.Add(rec)
 	}
 	f.Add(frame([]byte{0x80, 0x80, 0x80}))
@@ -157,7 +157,7 @@ func FuzzRoundtrip(f *testing.F) {
 	f.Add([]byte{}, []byte{}, uint64(0), byte(0))
 	f.Fuzz(func(t *testing.T, key, val []byte, seq uint64, kindByte byte) {
 		kind := Kind(kindByte % 2) // only legal kinds reach encode
-		rec, err := encode(key, val, seq, kind)
+		rec, err := encode(Entry{key: key, value: val, seq: seq, kind: kind})
 		if kind == KindDelete && len(val) > 0 {
 			require.ErrorIs(t, err, ErrInvalidInput, "tombstone with value")
 			return

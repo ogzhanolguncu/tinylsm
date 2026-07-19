@@ -1,4 +1,4 @@
-package main
+package wal
 
 import (
 	"encoding/binary"
@@ -48,7 +48,9 @@ func (k Kind) String() string {
 	}
 }
 
-func encode(key, value []byte, seq uint64, kind Kind) ([]byte, error) {
+func encode(entry Entry) ([]byte, error) {
+	key, value, kind, seq := entry.key, entry.value, entry.kind, entry.seq
+
 	if kind != KindPut && kind != KindDelete {
 		return nil, ErrInvalidInput
 	}
