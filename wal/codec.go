@@ -145,8 +145,9 @@ func decode(rec []byte) (Entry, int, error) {
 		return Entry{}, 0, ErrMalformed
 	}
 	off += n
-
-	if keyLen > uint64(len(payload)-off) {
+	// Payload size - bytes consumed so far
+	rem := uint64(len(payload) - off)
+	if keyLen > rem {
 		return Entry{}, 0, ErrMalformed
 	}
 	key := payload[off : off+int(keyLen)]
@@ -161,7 +162,8 @@ func decode(rec []byte) (Entry, int, error) {
 	}
 	off += n
 
-	if valLen > uint64(len(payload)-off) {
+	rem = uint64(len(payload) - off)
+	if valLen > rem {
 		return Entry{}, 0, ErrMalformed
 	}
 	value := payload[off : off+int(valLen)]
