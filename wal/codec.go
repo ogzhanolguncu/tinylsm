@@ -86,62 +86,62 @@ type Entry struct {
 // zero-copy, Entry.key and Entry.value alias rec's memory.
 // They are valid only until caller modifies or reuses rec
 // Callers that retain the Entry should copy to be safe
-func decode(rec []byte) (Entry, error) {
+func decode(rec []byte) (Entry, int, error) {
 	if len(rec) < minRecordSize {
-		return Entry{}, ErrTruncated
+		return Entry{}, 0, ErrTruncated
 	}
 
 	crc := binary.LittleEndian.Uint32(rec[offCRC:offLen])
 	length := binary.LittleEndian.Uint32(rec[offLen:headerSize])
 
 	if int(length) < minRecordSize-headerSize {
-		return Entry{}, ErrMalformed
+		return Entry{}, 0, ErrMalformed
 	}
 	if int(length) > len(rec)-headerSize {
-		return Entry{}, ErrTruncated
+		return Entry{}, 0, ErrTruncated
 	}
 	payload := rec[headerSize : headerSize+length]
 
 	if crc32.Checksum(payload, Castagnoli) != crc {
-		return Entry{}, ErrChecksum
+		return Entry{}, 0, ErrChecksum
 	}
 
 	seq := binary.LittleEndian.Uint64(payload[pOffSeq:pOffKind])
 	kind := Kind(payload[pOffKind])
 	if kind > KindDelete {
-		return Entry{}, ErrMalformed
+		return Entry{}, 0, ErrMalformed
 	}
 	off := pOffKeyLen
 
 	keyLen, n := binary.Uvarint(payload[off:])
 	if n <= 0 {
-		return Entry{}, ErrMalformed
+		return Entry{}, 0, ErrMalformed
 	}
 	off += n
 
 	if keyLen > uint64(len(payload)-off) {
-		return Entry{}, ErrMalformed
+		return Entry{}, 0, ErrMalformed
 	}
 	key := payload[off : off+int(keyLen)]
 	off += int(keyLen)
 
 	valLen, n := binary.Uvarint(payload[off:])
 	if n <= 0 {
-		return Entry{}, ErrMalformed
+		return Entry{}, 0, ErrMalformed
 	}
 	if kind == KindDelete && valLen != 0 {
-		return Entry{}, ErrMalformed
+		return Entry{}, 0, ErrMalformed
 	}
 	off += n
 
 	if valLen > uint64(len(payload)-off) {
-		return Entry{}, ErrMalformed
+		return Entry{}, 0, ErrMalformed
 	}
 	value := payload[off : off+int(valLen)]
 	off += int(valLen)
 
 	if off != int(length) {
-		return Entry{}, ErrMalformed
+		return Entry{}, 0, ErrMalformed
 	}
 
 	return Entry{
@@ -149,7 +149,17 @@ func decode(rec []byte) (Entry, error) {
 		value: value,
 		seq:   seq,
 		kind:  kind,
-	}, nil
+	}, off + headerSize, nil
+}
+
+// frameSize checks if given record is fits the minimum size and return header + payload length
+func frameSize(rec []byte) (int, bool) {
+	if len(rec) < headerSize {
+		return 0, false
+	}
+
+	n := binary.LittleEndian.Uint32(rec[offLen:headerSize])
+	return headerSize + int(n), true
 }
 
 func sizeUvarint(x uint64) int {

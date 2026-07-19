@@ -28,7 +28,7 @@ func TestRoundtrip(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := mustEncode(t, tc.key, tc.val, tc.seq, tc.kind)
-			e, err := decode(rec)
+			e, _, err := decode(rec)
 			require.NoError(t, err, "decode")
 			require.Equal(t, string(tc.key), string(e.key), "key")
 			require.Equal(t, string(tc.val), string(e.value), "value")
@@ -43,7 +43,7 @@ func TestRoundtrip(t *testing.T) {
 func TestTruncatedPrefixes(t *testing.T) {
 	rec := mustEncode(t, []byte("cat"), []byte("purr"), 7, KindPut)
 	for i := 0; i < len(rec); i++ {
-		_, err := decode(rec[:i])
+		_, _, err := decode(rec[:i])
 		require.Errorf(t, err, "decode(rec[:%d])", i)
 	}
 }
@@ -52,7 +52,7 @@ func TestTruncatedPrefixes(t *testing.T) {
 func TestTrailingBytesIgnored(t *testing.T) {
 	rec := mustEncode(t, []byte("cat"), []byte("purr"), 7, KindPut)
 	buf := append(append([]byte{}, rec...), []byte("garbage that is really the next record")...)
-	e, err := decode(buf)
+	e, _, err := decode(buf)
 	require.NoError(t, err, "decode with trailing bytes")
 	require.Equal(t, "cat", string(e.key))
 	require.Equal(t, "purr", string(e.value))
@@ -65,7 +65,7 @@ func TestSingleBitCorruption(t *testing.T) {
 	for i := 0; i < len(orig); i++ {
 		rec := append([]byte{}, orig...)
 		rec[i] ^= 0xFF
-		_, err := decode(rec)
+		_, _, err := decode(rec)
 		require.Errorf(t, err, "byte %d flipped: want error", i)
 		if i >= headerSize {
 			require.ErrorIsf(t, err, ErrChecksum, "payload byte %d flipped", i)
@@ -80,7 +80,7 @@ func TestLengthLiesSmall(t *testing.T) {
 	rec := mustEncode(t, []byte("cat"), []byte("purr"), 7, KindPut)
 	binary.LittleEndian.PutUint32(rec[offLen:headerSize], 5)
 	binary.LittleEndian.PutUint32(rec[offCRC:offLen], crc32.Checksum(rec[headerSize:headerSize+5], Castagnoli))
-	_, err := decode(rec)
+	_, _, err := decode(rec)
 	require.ErrorIs(t, err, ErrMalformed)
 }
 
@@ -90,7 +90,7 @@ func TestKeyLenLies(t *testing.T) {
 	p = append(p, byte(KindPut))
 	p = binary.AppendUvarint(p, 200) // keyLen claims 200...
 	p = append(p, 'x')               // ...one byte follows
-	_, err := decode(frame(p))
+	_, _, err := decode(frame(p))
 	require.ErrorIs(t, err, ErrMalformed)
 }
 
@@ -100,7 +100,7 @@ func TestIncompleteVarint(t *testing.T) {
 	p := binary.LittleEndian.AppendUint64(nil, 7)
 	p = append(p, byte(KindPut))
 	p = append(p, 0x80, 0x80) // varint never terminates
-	_, err := decode(frame(p))
+	_, _, err := decode(frame(p))
 	require.ErrorIs(t, err, ErrMalformed)
 }
 
@@ -114,8 +114,29 @@ func TestUnknownKindRejected(t *testing.T) {
 	p = append(p, 'k')
 	p = binary.AppendUvarint(p, 1)
 	p = append(p, 'v')
-	_, err := decode(frame(p))
+	_, _, err := decode(frame(p))
 	require.ErrorIs(t, err, ErrMalformed)
+}
+
+// The consumed count is what the reader uses to find record N+1: decode
+// record, advance by n, decode again. If n is short (e.g. payload length
+// without the crc+len header), the second decode lands mid-record.
+func TestConsumedAdvancesToNextRecord(t *testing.T) {
+	r1 := mustEncode(t, []byte("cat"), []byte("purr"), 7, KindPut)
+	r2 := mustEncode(t, []byte("dog"), []byte("woof"), 8, KindPut)
+	buf := append(append([]byte{}, r1...), r2...)
+
+	e1, n1, err := decode(buf)
+	require.NoError(t, err, "first record")
+	require.Equal(t, "cat", string(e1.key))
+	require.Equal(t, len(r1), n1, "consumed must equal full first record size")
+
+	e2, n2, err := decode(buf[n1:])
+	require.NoError(t, err, "second record, starting at consumed offset")
+	require.Equal(t, "dog", string(e2.key))
+	require.Equal(t, "woof", string(e2.value))
+	require.Equal(t, len(r2), n2)
+	require.Equal(t, len(buf), n1+n2, "two records consume the whole buffer")
 }
 
 // Tombstones must not carry a value; encode is the write-side gate.
@@ -163,7 +184,7 @@ func FuzzRoundtrip(f *testing.F) {
 			return
 		}
 		require.NoError(t, err, "encode")
-		e, err := decode(rec)
+		e, _, err := decode(rec)
 		require.NoError(t, err, "decode of freshly encoded record")
 		require.Equal(t, string(key), string(e.key), "key")
 		require.Equal(t, string(val), string(e.value), "value")

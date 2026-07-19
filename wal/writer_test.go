@@ -32,7 +32,7 @@ func TestAppendAfterFailureRefused(t *testing.T) {
 	// the acknowledged record must still be intact on disk
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
-	e, err := decode(data)
+	e, _, err := decode(data)
 	require.NoError(t, err)
 	require.Equal(t, good.key, e.key)
 	require.Equal(t, good.value, e.value)

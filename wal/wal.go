@@ -4,13 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 )
 
 type Writer struct {
 	f    *os.File
-	file string
+	path string
 	err  error
 }
 
@@ -23,7 +24,7 @@ func NewWriter(path string) (*Writer, error) {
 	}
 	return &Writer{
 		f:    f,
-		file: name,
+		path: path,
 	}, nil
 }
 
@@ -31,22 +32,20 @@ func (w *Writer) Append(e Entry) error {
 	if w.err != nil {
 		return fmt.Errorf("writer is broken: %w", w.err)
 	}
+	fail := func(e error) error { w.err = e; return e }
 	enc, err := encode(e)
 	if err != nil {
 		return fmt.Errorf("encode entry: %w", err)
 	}
 	n, err := w.f.Write(enc)
 	if err != nil {
-		w.err = fmt.Errorf("write wal after %d bytes: %w", n, err)
-		return w.err
+		return fail(fmt.Errorf("write wal after %d bytes: %w", n, err))
 	}
 	if n < len(enc) {
-		w.err = io.ErrShortWrite
-		return w.err
+		return fail(io.ErrShortWrite)
 	}
 	if err := w.f.Sync(); err != nil {
-		w.err = fmt.Errorf("fsync wal (not durable): %w", err)
-		return w.err
+		return fail(fmt.Errorf("fsync wal (not durable): %w", err))
 	}
 	return nil
 }
@@ -77,13 +76,76 @@ func createWALFile(dir, name string) (file *os.File, err error) {
 	return f, nil
 }
 
+func Replay(path string) ([]Entry, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("replay wal: %w", err)
+	}
+
+	var entries []Entry
+	off := 0
+
+	torn := func() ([]Entry, error) {
+		if err := truncateAndFsync(path, off); err != nil {
+			return nil, err
+		}
+		log.Printf("wal: torn tail in %s at offset %d, truncated", path, off)
+		return entries, nil
+	}
+
+	for off < len(data) {
+		rem := len(data) - off
+
+		if rem < headerSize {
+			return torn() // data is short
+		}
+
+		size, ok := frameSize(data[off:])
+		if !ok {
+			return torn() // header is short
+		}
+
+		frameEnd := off + size
+		if frameEnd > len(data) {
+			return torn() // frame extends EOF
+		}
+
+		e, n, err := decode(data[off:])
+		if err != nil {
+			if frameEnd == len(data) {
+				return torn()
+			}
+			return nil, fmt.Errorf("replay: corrupt record at offset %d: %w", off, err)
+		}
+
+		entries = append(entries, e)
+		off += n
+	}
+	return entries, nil
+}
+
+func truncateAndFsync(path string, off int) error {
+	if err := os.Truncate(path, int64(off)); err != nil {
+		return fmt.Errorf("truncate: %w", err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("reopen for fsync: %w", err)
+	}
+	defer f.Close()
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("fsync after truncate: %w", err)
+	}
+	return nil
+}
+
 func (w *Writer) Close() error {
 	var errs []error
 	if err := w.f.Sync(); err != nil {
-		errs = append(errs, fmt.Errorf("sync wal file %s: %w", w.file, err))
+		errs = append(errs, fmt.Errorf("sync wal file %s: %w", w.path, err))
 	}
 	if err := w.f.Close(); err != nil {
-		errs = append(errs, fmt.Errorf("close wal file %s: %w", w.file, err))
+		errs = append(errs, fmt.Errorf("close wal file %s: %w", w.path, err))
 	}
 	err := errors.Join(errs...)
 	if err != nil {
