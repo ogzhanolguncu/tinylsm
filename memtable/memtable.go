@@ -1,11 +1,14 @@
 package memtable
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/ogzhanolguncu/tinylsm/keys"
+	"github.com/ogzhanolguncu/tinylsm/pkg/contract"
 	sl "github.com/ogzhanolguncu/tinylsm/skiplist"
 	"github.com/ogzhanolguncu/tinylsm/wal"
 )
@@ -19,9 +22,9 @@ type Memtable struct {
 	skiplist   *sl.SkipList
 	writer     *wal.Writer
 	nextSeq    uint64
-	mu         sync.Mutex
+	mu         sync.RWMutex
 	approxSize uint64
-	closed     bool
+	closed     atomic.Bool
 }
 
 func New(path string, seed int64) (*Memtable, error) {
@@ -47,11 +50,46 @@ func (mt *Memtable) Delete(key []byte) error {
 	return mt.mutate(key, nil, wal.KindDelete)
 }
 
+func (mt *Memtable) Get(key []byte) ([]byte, bool) {
+	if mt.closed.Load() {
+		// its closed
+		return nil, false
+	}
+
+	ik, err := keys.Encode(key, keys.MaxSeq, keys.KindPut)
+	if err != nil {
+		return nil, false
+	}
+
+	it := mt.skiplist.NewIterator()
+	it.Seek(ik)
+	if !it.Valid() {
+		return nil, false
+	}
+
+	encodedKey := it.Key()
+	skVal := it.Value()
+
+	// Only a bug in mutate can put a key shorter than a trailer into the skiplist.
+	userKey, _, kind, err := keys.Decode(encodedKey)
+	contract.Invariant(err == nil, "memtable.Get: skiplist holds a malformed internal key %q: %v", encodedKey, err)
+
+	// Overshoot before kind: the kind of an entry belonging to another user key
+	// says nothing about this one.
+	if !bytes.Equal(userKey, key) {
+		return nil, false
+	}
+	if kind == keys.KindDelete {
+		return nil, false
+	}
+	return skVal, true
+}
+
 func (mt *Memtable) mutate(key, val []byte, kind wal.Kind) error {
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
 
-	if mt.closed {
+	if mt.closed.Load() {
 		return ErrClosed
 	}
 
@@ -82,9 +120,9 @@ func (mt *Memtable) mutate(key, val []byte, kind wal.Kind) error {
 func (mt *Memtable) Close() error {
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
-	if mt.closed {
+	if mt.closed.Load() {
 		return ErrClosed
 	}
-	mt.closed = true
+	mt.closed.Store(true)
 	return mt.writer.Close()
 }

@@ -185,3 +185,89 @@ func TestClosedMemtableRejectsDeletes(t *testing.T) {
 	require.NoError(t, mt.Close())
 	require.ErrorIs(t, mt.Delete([]byte("cat")), ErrClosed)
 }
+
+// One fixture exercising every way Get can be wrong: the wrong version, a
+// tombstone, an empty value mistaken for one, and the three overshoot shapes.
+func TestGet(t *testing.T) {
+	mt, _ := newMemtable(t)
+	defer mt.Close()
+
+	require.NoError(t, mt.Put([]byte("cat"), []byte("purr")))
+	require.NoError(t, mt.Put([]byte("dog"), []byte("woof")))
+	require.NoError(t, mt.Put([]byte("elephantine"), []byte("big")))
+	require.NoError(t, mt.Put([]byte("empty"), []byte("")))
+	require.NoError(t, mt.Delete([]byte("dog")))
+	require.NoError(t, mt.Put([]byte("cat"), []byte("meow")))
+
+	cases := []struct {
+		name      string
+		key       string
+		wantVal   string
+		wantFound bool
+	}{
+		{"newest version wins", "cat", "meow", true},
+		{"tombstone reads as absent", "dog", "", false},
+		{"empty value is not a tombstone", "empty", "", true},
+		{"user key longer than a trailer", "elephantine", "big", true},
+		{"absent key sorting before every entry", "bee", "", false},
+		{"absent key that a stored key prefixes", "cats", "", false},
+		{"absent key past the last entry", "zebra", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			val, found := mt.Get([]byte(tc.key))
+			require.Equal(t, tc.wantFound, found)
+			require.Equal(t, tc.wantVal, string(val))
+		})
+	}
+}
+
+// Seek parks the cursor past the end when nothing matches; Get must notice
+// rather than dereference it.
+func TestGetOnEmptyMemtable(t *testing.T) {
+	mt, _ := newMemtable(t)
+	defer mt.Close()
+
+	val, found := mt.Get([]byte("cat"))
+	require.False(t, found)
+	require.Nil(t, val)
+}
+
+// Get takes no lock: it relies on the skiplist storing next pointers atomically
+// so readers can traverse while a writer splices. Nothing else proves that.
+func TestGetIsSafeDuringConcurrentPuts(t *testing.T) {
+	const writers, readers = 8, 8
+
+	mt, _ := newMemtable(t)
+	defer mt.Close()
+	require.NoError(t, mt.Put([]byte("cat"), []byte("v0")))
+
+	var wg sync.WaitGroup
+	for range writers {
+		wg.Go(func() {
+			for i := range 100 {
+				require.NoError(t, mt.Put([]byte("cat"), fmt.Appendf(nil, "v%d", i+1)))
+			}
+		})
+	}
+	for range readers {
+		wg.Go(func() {
+			for range 100 {
+				val, found := mt.Get([]byte("cat"))
+				require.True(t, found, "cat is written before the readers start and never deleted")
+				require.NotEmpty(t, val)
+			}
+		})
+	}
+	wg.Wait()
+}
+
+func TestGetOnClosedMemtable(t *testing.T) {
+	mt, _ := newMemtable(t)
+	require.NoError(t, mt.Put([]byte("cat"), []byte("purr")))
+	require.NoError(t, mt.Close())
+
+	val, found := mt.Get([]byte("cat"))
+	require.False(t, found, "a closed memtable answers nothing, even for data still in memory")
+	require.Nil(t, val)
+}

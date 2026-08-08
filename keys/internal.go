@@ -9,7 +9,7 @@ import (
 
 const (
 	trailerSize = 8
-	maxSeq      = 1<<56 - 1
+	MaxSeq      = 1<<56 - 1
 )
 
 var (
@@ -31,7 +31,7 @@ func Encode(userKey []byte, seq uint64, kind Kind) ([]byte, error) {
 	if len(userKey) == 0 {
 		return nil, ErrEmptyUserKey
 	}
-	if seq > maxSeq {
+	if seq > MaxSeq {
 		return nil, ErrSeqOverflow
 	}
 	if uint64(kind) > 0x03 {

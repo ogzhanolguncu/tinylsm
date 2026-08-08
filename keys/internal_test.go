@@ -23,7 +23,7 @@ func TestEncodeDecodeRoundTrip(t *testing.T) {
 		{"single byte key", []byte("a"), 1, KindPut},
 		{"binary key with 0x00 and 0xFF", []byte{0x00, 0xFF, 0x00, 0x80}, 42, KindPut},
 		{"seq zero", []byte("k"), 0, KindPut},
-		{"seq at 56-bit ceiling", []byte("k"), maxSeq, KindDelete},
+		{"seq at 56-bit ceiling", []byte("k"), MaxSeq, KindDelete},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -44,16 +44,16 @@ func TestEncodeDecodeRoundTrip(t *testing.T) {
 // max seq next to a nonzero kind is the case that catches an off-by-one in the
 // shift/mask: neither field may corrupt the other.
 func TestTrailerPackingIsolatesFields(t *testing.T) {
-	ik, err := Encode([]byte("k"), maxSeq, KindDelete)
+	ik, err := Encode([]byte("k"), MaxSeq, KindDelete)
 	require.NoError(t, err)
 
 	trailer := binary.LittleEndian.Uint64(ik[len(ik)-trailerSize:])
-	require.Equal(t, uint64(maxSeq), trailer>>8, "seq occupies the top 56 bits")
+	require.Equal(t, uint64(MaxSeq), trailer>>8, "seq occupies the top 56 bits")
 	require.Equal(t, uint64(KindDelete), trailer&0xff, "kind occupies the low byte")
 
 	_, seq, kind, err := Decode(ik)
 	require.NoError(t, err)
-	require.Equal(t, uint64(maxSeq), seq)
+	require.Equal(t, uint64(MaxSeq), seq)
 	require.Equal(t, KindDelete, kind)
 }
 
@@ -66,10 +66,10 @@ func TestEncodeRejectsEmptyUserKey(t *testing.T) {
 }
 
 func TestEncodeRejectsSeqOverflow(t *testing.T) {
-	_, err := Encode([]byte("k"), maxSeq, KindPut)
-	require.NoError(t, err, "maxSeq is the largest legal seq")
+	_, err := Encode([]byte("k"), MaxSeq, KindPut)
+	require.NoError(t, err, "MaxSeq is the largest legal seq")
 
-	_, err = Encode([]byte("k"), maxSeq+1, KindPut)
+	_, err = Encode([]byte("k"), MaxSeq+1, KindPut)
 	require.ErrorIs(t, err, ErrSeqOverflow)
 }
 

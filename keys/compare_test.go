@@ -12,7 +12,7 @@ import (
 func corpus(tb testing.TB) [][]byte {
 	tb.Helper()
 	userKeys := []string{"a", "ab", "abc", "b", "foo", "goo", "\x00", "\x00\x00", "\xff"}
-	seqs := []uint64{0, 1, 2, 9, 1 << 30, maxSeq}
+	seqs := []uint64{0, 1, 2, 9, 1 << 30, MaxSeq}
 
 	var out [][]byte
 	for _, uk := range userKeys {
@@ -35,7 +35,7 @@ func TestCompareOrdering(t *testing.T) {
 		{"identical keys", mustEncode(t, "foo", 9), mustEncode(t, "foo", 9), 0},
 		{"user key decides, seq ignored", mustEncode(t, "foo", 9), mustEncode(t, "goo", 1), -1},
 		{"user key decides, reversed", mustEncode(t, "goo", 1), mustEncode(t, "foo", 9), 1},
-		{"seq 0 vs maxSeq", mustEncode(t, "k", maxSeq), mustEncode(t, "k", 0), -1},
+		{"seq 0 vs MaxSeq", mustEncode(t, "k", MaxSeq), mustEncode(t, "k", 0), -1},
 		{"binary user key, higher seq first", mustEncode(t, "\x00", 2), mustEncode(t, "\x00", 1), -1},
 
 		// Returning 0 for two different byte slices is safe only because seq is
@@ -60,9 +60,9 @@ func TestComparePrefixKeysDoNotBleedIntoTrailer(t *testing.T) {
 	}{
 		{`"ab" before "abc", equal seq`, mustEncode(t, "ab", 1), mustEncode(t, "abc", 1), -1},
 		{`"abc" after "ab", equal seq`, mustEncode(t, "abc", 1), mustEncode(t, "ab", 1), 1},
-		{`"ab"@maxSeq still before "abc"@0`, mustEncode(t, "ab", maxSeq), mustEncode(t, "abc", 0), -1},
-		{`"abc"@0 still after "ab"@maxSeq`, mustEncode(t, "abc", 0), mustEncode(t, "ab", maxSeq), 1},
-		{`"a" before "ab"`, mustEncode(t, "a", 0), mustEncode(t, "ab", maxSeq), -1},
+		{`"ab"@MaxSeq still before "abc"@0`, mustEncode(t, "ab", MaxSeq), mustEncode(t, "abc", 0), -1},
+		{`"abc"@0 still after "ab"@MaxSeq`, mustEncode(t, "abc", 0), mustEncode(t, "ab", MaxSeq), 1},
+		{`"a" before "ab"`, mustEncode(t, "a", 0), mustEncode(t, "ab", MaxSeq), -1},
 		{`0x00 user key is not a terminator`, mustEncode(t, "\x00", 1), mustEncode(t, "\x00\x00", 1), -1},
 	}
 	for _, tc := range cases {
@@ -102,7 +102,7 @@ func TestCompareProducesExpectedTotalOrder(t *testing.T) {
 	}, got)
 }
 
-// The reason seq sorts descending. Get builds a lookup key (userKey, maxSeq) and
+// The reason seq sorts descending. Get builds a lookup key (userKey, MaxSeq) and
 // asks for the first entry >= it; descending seq is what makes that first entry
 // the newest version rather than a miss past the end of the user key's run.
 func TestCompareSeekLandsOnNewestVersion(t *testing.T) {
@@ -115,7 +115,7 @@ func TestCompareSeekLandsOnNewestVersion(t *testing.T) {
 	}
 	sort.Slice(keys, func(i, j int) bool { return Compare(keys[i], keys[j]) < 0 })
 
-	target := mustEncode(t, "foo", maxSeq)
+	target := mustEncode(t, "foo", MaxSeq)
 	i := sort.Search(len(keys), func(i int) bool { return Compare(keys[i], target) >= 0 })
 	require.Less(t, i, len(keys), "seek must not run off the end")
 
