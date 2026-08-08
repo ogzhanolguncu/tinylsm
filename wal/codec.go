@@ -9,9 +9,9 @@ import (
 )
 
 type Entry struct {
-	key, value []byte
-	seq        uint64
-	kind       Kind
+	Key, Value []byte
+	Seq        uint64
+	Kind       Kind
 }
 
 var (
@@ -64,7 +64,7 @@ func encode(entry Entry) ([]byte, error) {
 }
 
 func buildPayload(entry Entry) ([]byte, error) {
-	key, value, kind, seq := entry.key, entry.value, entry.kind, entry.seq
+	key, value, kind, seq := entry.Key, entry.Value, entry.Kind, entry.Seq
 
 	if kind != KindPut && kind != KindDelete {
 		return nil, ErrInvalidInput
@@ -174,10 +174,10 @@ func decode(rec []byte) (Entry, int, error) {
 	}
 
 	return Entry{
-		key:   key,
-		value: value,
-		seq:   seq,
-		kind:  kind,
+		Key:   key,
+		Value: value,
+		Seq:   seq,
+		Kind:  kind,
 	}, off + headerSize, nil
 }
 

@@ -36,9 +36,9 @@ func buildWAL(t *testing.T, entries []Entry) ([]byte, []int) {
 }
 
 var replayFixture = []Entry{
-	{key: []byte("cat"), value: []byte("purr"), seq: 1, kind: KindPut},
-	{key: []byte("dog"), value: []byte("woof"), seq: 2, kind: KindPut},
-	{key: []byte("cat"), value: nil, seq: 3, kind: KindDelete},
+	{Key: []byte("cat"), Value: []byte("purr"), Seq: 1, Kind: KindPut},
+	{Key: []byte("dog"), Value: []byte("woof"), Seq: 2, Kind: KindPut},
+	{Key: []byte("cat"), Value: nil, Seq: 3, Kind: KindDelete},
 }
 
 // The done-when for Phase 2: chop the file at EVERY byte boundary. No cut is
@@ -65,8 +65,8 @@ func TestReplayTornTailEveryCut(t *testing.T) {
 		}
 		require.Len(t, got, wantN, "cut=%d", cut)
 		for i := range got {
-			require.Equal(t, string(replayFixture[i].key), string(got[i].key), "cut=%d entry=%d", cut, i)
-			require.Equal(t, replayFixture[i].seq, got[i].seq, "cut=%d entry=%d", cut, i)
+			require.Equal(t, string(replayFixture[i].Key), string(got[i].Key), "cut=%d entry=%d", cut, i)
+			require.Equal(t, replayFixture[i].Seq, got[i].Seq, "cut=%d entry=%d", cut, i)
 		}
 
 		// replay must have truncated the torn bytes off the file

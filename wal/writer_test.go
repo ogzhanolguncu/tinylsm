@@ -15,10 +15,10 @@ import (
 // checks only key+seq). Covers put, tombstone (nil value), and empty value.
 func TestWriterReplayRoundTrip(t *testing.T) {
 	entries := []Entry{
-		{key: []byte("cat"), value: []byte("purr"), seq: 1, kind: KindPut},
-		{key: []byte("dog"), value: nil, seq: 2, kind: KindDelete},
-		{key: []byte("bird"), value: []byte{}, seq: 3, kind: KindPut},
-		{key: []byte{0x00, 0xFF, 0x80}, value: []byte{0x01, 0x00, 0x02}, seq: 4, kind: KindPut},
+		{Key: []byte("cat"), Value: []byte("purr"), Seq: 1, Kind: KindPut},
+		{Key: []byte("dog"), Value: nil, Seq: 2, Kind: KindDelete},
+		{Key: []byte("bird"), Value: []byte{}, Seq: 3, Kind: KindPut},
+		{Key: []byte{0x00, 0xFF, 0x80}, Value: []byte{0x01, 0x00, 0x02}, Seq: 4, Kind: KindPut},
 	}
 
 	path := filepath.Join(t.TempDir(), "000000001.wal")
@@ -39,10 +39,10 @@ func TestWriterReplayRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got, len(entries))
 	for i, want := range entries {
-		require.Equalf(t, want.seq, got[i].seq, "entry %d seq", i)
-		require.Equalf(t, want.kind, got[i].kind, "entry %d kind", i)
-		require.Equalf(t, string(want.key), string(got[i].key), "entry %d key", i)
-		require.Equalf(t, string(want.value), string(got[i].value), "entry %d value", i)
+		require.Equalf(t, want.Seq, got[i].Seq, "entry %d seq", i)
+		require.Equalf(t, want.Kind, got[i].Kind, "entry %d kind", i)
+		require.Equalf(t, string(want.Key), string(got[i].Key), "entry %d key", i)
+		require.Equalf(t, string(want.Value), string(got[i].Value), "entry %d value", i)
 	}
 
 	after, err := os.ReadFile(path)
@@ -58,17 +58,17 @@ func TestAppendAfterFailureRefused(t *testing.T) {
 	w, err := NewWriter(path)
 	require.NoError(t, err)
 
-	good := Entry{key: []byte("k1"), value: []byte("v1"), seq: 1, kind: KindPut}
+	good := Entry{Key: []byte("k1"), Value: []byte("v1"), Seq: 1, Kind: KindPut}
 	require.NoError(t, w.Append(good))
 
 	// force the next write to fail: yank the fd out from under the writer
 	require.NoError(t, w.f.Close())
 
-	err = w.Append(Entry{key: []byte("k2"), value: []byte("v2"), seq: 2, kind: KindPut})
+	err = w.Append(Entry{Key: []byte("k2"), Value: []byte("v2"), Seq: 2, Kind: KindPut})
 	require.Error(t, err, "append on closed file must fail")
 
 	// writer must now be poisoned and refuse before touching the file
-	err = w.Append(Entry{key: []byte("k3"), value: []byte("v3"), seq: 3, kind: KindPut})
+	err = w.Append(Entry{Key: []byte("k3"), Value: []byte("v3"), Seq: 3, Kind: KindPut})
 	require.ErrorContains(t, err, "writer is broken")
 
 	// the acknowledged record must still be intact on disk
@@ -76,7 +76,7 @@ func TestAppendAfterFailureRefused(t *testing.T) {
 	require.NoError(t, err)
 	e, _, err := decode(data)
 	require.NoError(t, err)
-	require.Equal(t, good.key, e.key)
-	require.Equal(t, good.value, e.value)
-	require.Equal(t, good.seq, e.seq)
+	require.Equal(t, good.Key, e.Key)
+	require.Equal(t, good.Value, e.Value)
+	require.Equal(t, good.Seq, e.Seq)
 }

@@ -30,10 +30,10 @@ func TestRoundtrip(t *testing.T) {
 			rec := mustEncode(t, tc.key, tc.val, tc.seq, tc.kind)
 			e, _, err := decode(rec)
 			require.NoError(t, err, "decode")
-			require.Equal(t, string(tc.key), string(e.key), "key")
-			require.Equal(t, string(tc.val), string(e.value), "value")
-			require.Equal(t, tc.seq, e.seq, "seq")
-			require.Equal(t, tc.kind, e.kind, "kind")
+			require.Equal(t, string(tc.key), string(e.Key), "key")
+			require.Equal(t, string(tc.val), string(e.Value), "value")
+			require.Equal(t, tc.seq, e.Seq, "seq")
+			require.Equal(t, tc.kind, e.Kind, "kind")
 		})
 	}
 }
@@ -54,8 +54,8 @@ func TestTrailingBytesIgnored(t *testing.T) {
 	buf := append(append([]byte{}, rec...), []byte("garbage that is really the next record")...)
 	e, _, err := decode(buf)
 	require.NoError(t, err, "decode with trailing bytes")
-	require.Equal(t, "cat", string(e.key))
-	require.Equal(t, "purr", string(e.value))
+	require.Equal(t, "cat", string(e.Key))
+	require.Equal(t, "purr", string(e.Value))
 }
 
 // Flip each byte in turn: every flip must be rejected. Flips inside the
@@ -123,7 +123,7 @@ func TestUnknownKindRejected(t *testing.T) {
 // consumed" guard can reject it. Without that guard decode would also return
 // a consumed count smaller than the frame, desyncing the reader's walk.
 func TestPayloadSlackRejected(t *testing.T) {
-	p, err := buildPayload(Entry{key: []byte("cat"), value: []byte("purr"), seq: 7, kind: KindPut})
+	p, err := buildPayload(Entry{Key: []byte("cat"), Value: []byte("purr"), Seq: 7, Kind: KindPut})
 	require.NoError(t, err)
 	p = append(p, 0xDE, 0xAD, 0xBE, 0xEF) // slack no field accounts for
 	_, _, err = decode(frame(p))
@@ -140,26 +140,26 @@ func TestConsumedAdvancesToNextRecord(t *testing.T) {
 
 	e1, n1, err := decode(buf)
 	require.NoError(t, err, "first record")
-	require.Equal(t, "cat", string(e1.key))
+	require.Equal(t, "cat", string(e1.Key))
 	require.Equal(t, len(r1), n1, "consumed must equal full first record size")
 
 	e2, n2, err := decode(buf[n1:])
 	require.NoError(t, err, "second record, starting at consumed offset")
-	require.Equal(t, "dog", string(e2.key))
-	require.Equal(t, "woof", string(e2.value))
+	require.Equal(t, "dog", string(e2.Key))
+	require.Equal(t, "woof", string(e2.Value))
 	require.Equal(t, len(r2), n2)
 	require.Equal(t, len(buf), n1+n2, "two records consume the whole buffer")
 }
 
 // Tombstones must not carry a value; encode is the write-side gate.
 func TestEncodeRejectsTombstoneWithValue(t *testing.T) {
-	_, err := encode(Entry{key: []byte("cat"), value: []byte("oops"), seq: 7, kind: KindDelete})
+	_, err := encode(Entry{Key: []byte("cat"), Value: []byte("oops"), Seq: 7, Kind: KindDelete})
 	require.ErrorIs(t, err, ErrInvalidInput)
 }
 
 func mustEncode(t *testing.T, key, val []byte, seq uint64, kind Kind) []byte {
 	t.Helper()
-	rec, err := encode(Entry{key: key, value: val, seq: seq, kind: kind})
+	rec, err := encode(Entry{Key: key, Value: val, Seq: seq, Kind: kind})
 	require.NoError(t, err, "encode")
 	return rec
 }
@@ -167,7 +167,7 @@ func mustEncode(t *testing.T, key, val []byte, seq uint64, kind Kind) []byte {
 // Decode must never panic, whatever bytes arrive.
 func FuzzDecode(f *testing.F) {
 	f.Add([]byte{})
-	if rec, err := encode(Entry{key: []byte("cat"), value: []byte("purr"), seq: 7, kind: KindPut}); err == nil {
+	if rec, err := encode(Entry{Key: []byte("cat"), Value: []byte("purr"), Seq: 7, Kind: KindPut}); err == nil {
 		f.Add(rec)
 	}
 	f.Add(frame([]byte{0x80, 0x80, 0x80}))
@@ -182,7 +182,7 @@ func FuzzRoundtrip(f *testing.F) {
 	f.Add([]byte{}, []byte{}, uint64(0), byte(0))
 	f.Fuzz(func(t *testing.T, key, val []byte, seq uint64, kindByte byte) {
 		kind := Kind(kindByte % 2) // only legal kinds reach encode
-		rec, err := encode(Entry{key: key, value: val, seq: seq, kind: kind})
+		rec, err := encode(Entry{Key: key, Value: val, Seq: seq, Kind: kind})
 		if kind == KindDelete && len(val) > 0 {
 			require.ErrorIs(t, err, ErrInvalidInput, "tombstone with value")
 			return
@@ -190,9 +190,9 @@ func FuzzRoundtrip(f *testing.F) {
 		require.NoError(t, err, "encode")
 		e, _, err := decode(rec)
 		require.NoError(t, err, "decode of freshly encoded record")
-		require.Equal(t, string(key), string(e.key), "key")
-		require.Equal(t, string(val), string(e.value), "value")
-		require.Equal(t, seq, e.seq, "seq")
-		require.Equal(t, kind, e.kind, "kind")
+		require.Equal(t, string(key), string(e.Key), "key")
+		require.Equal(t, string(val), string(e.Value), "value")
+		require.Equal(t, seq, e.Seq, "seq")
+		require.Equal(t, kind, e.Kind, "kind")
 	})
 }
