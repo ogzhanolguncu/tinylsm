@@ -2,6 +2,7 @@ package memtable
 
 import (
 	"fmt"
+	"math/rand/v2"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -412,4 +413,82 @@ func TestReplayAcrossTwoReopens(t *testing.T) {
 	entries, err := wal.Replay(path)
 	require.NoError(t, err)
 	require.Len(t, entries, 3, "every session appends to the same WAL")
+}
+
+// The hand-written tests each pin one behavior. This one looks for the
+// combination none of them thought of: a delete of a key that was overwritten
+// three sessions ago, a rewrite of a key deleted just before a reopen, and so
+// on. The oracle is a plain map, which never crashes and never replays, so any
+// divergence is the memtable's.
+func TestRandomOpsMatchAMapOracleAcrossReopens(t *testing.T) {
+	const (
+		ops         = 1200 // every mutating op fsyncs, so this is wall-clock bound
+		keyspace    = 40   // small, so overwrites and deletes actually collide
+		reopenEvery = 61
+	)
+
+	rng := rand.New(rand.NewPCG(1, 2))
+	key := func(i int) []byte { return fmt.Appendf(nil, "key%02d", i) }
+
+	// present-in-the-map == live key; absent == never written or tombstoned.
+	// A tombstone is not a distinct oracle state, because Get cannot see one.
+	oracle := make(map[string]string)
+
+	checkAll := func(mt *Memtable, when string) {
+		t.Helper()
+		for i := range keyspace {
+			k := key(i)
+			val, found := mt.Get(k)
+			want, live := oracle[string(k)]
+			require.Equal(t, live, found, "%s: %q liveness", when, k)
+			if live {
+				require.Equal(t, want, string(val), "%s: %q value", when, k)
+			}
+		}
+	}
+
+	mt, path := newMemtable(t)
+	defer func() { _ = mt.Close() }()
+
+	for i := range ops {
+		k := key(rng.IntN(keyspace))
+
+		switch n := rng.IntN(100); {
+		case n < 55:
+			val := fmt.Appendf(nil, "v%d", i)
+			require.NoError(t, mt.Put(k, val))
+			oracle[string(k)] = string(val)
+		case n < 70:
+			// empty value: still a live key, and a different code path than a delete
+			require.NoError(t, mt.Put(k, nil))
+			oracle[string(k)] = ""
+		case n < 90:
+			require.NoError(t, mt.Delete(k))
+			delete(oracle, string(k))
+		default:
+			val, found := mt.Get(k)
+			want, live := oracle[string(k)]
+			require.Equal(t, live, found, "op %d: %q liveness", i, k)
+			if live {
+				require.Equal(t, want, string(val), "op %d: %q value", i, k)
+			}
+		}
+
+		if i > 0 && i%reopenEvery == 0 {
+			// crash: the old memtable is abandoned unclosed, its fd left dangling,
+			// exactly as a killed process would leave it.
+			mt = openMemtable(t, path)
+			checkAll(mt, fmt.Sprintf("after reopen at op %d", i))
+		}
+	}
+
+	checkAll(mt, "final")
+
+	// the WAL only ever grew: one record per mutating op, seqs dense from zero
+	entries, err := wal.Replay(path)
+	require.NoError(t, err)
+	for i, e := range entries {
+		require.Equal(t, uint64(i), e.Seq, "record %d", i)
+	}
+	require.Equal(t, uint64(len(entries)), mt.nextSeq)
 }
