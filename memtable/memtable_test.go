@@ -19,6 +19,13 @@ func newMemtable(t *testing.T) (*Memtable, string) {
 	return mt, path
 }
 
+func openMemtable(t *testing.T, path string) *Memtable {
+	t.Helper()
+	mt, err := Open(path, 1)
+	require.NoError(t, err)
+	return mt
+}
+
 // The WAL is the only thing that survives a crash, so what it holds has to match
 // what Put was told: same keys and values, kinds intact, and seqs handed out from
 // zero without gaps or repeats.
@@ -270,4 +277,139 @@ func TestGetOnClosedMemtable(t *testing.T) {
 	val, found := mt.Get([]byte("cat"))
 	require.False(t, found, "a closed memtable answers nothing, even for data still in memory")
 	require.Nil(t, val)
+}
+
+// A crash is just "Close never ran". Everything Put returned success for is
+// already fsynced, so reopening has to reconstruct the exact same view: latest
+// value per key, tombstones still hiding what they hid, and seqs resuming past
+// the highest one on disk so post-crash writes never tie with pre-crash ones.
+func TestReplayFromCrash(t *testing.T) {
+	mt, path := newMemtable(t)
+
+	require.NoError(t, mt.Put([]byte("cat"), []byte("purr")))
+	require.NoError(t, mt.Put([]byte("dog"), []byte("woof")))
+	require.NoError(t, mt.Put([]byte("elephantine"), []byte("big")))
+	require.NoError(t, mt.Put([]byte("empty"), []byte("")))
+	require.NoError(t, mt.Delete([]byte("dog")))
+	require.NoError(t, mt.Put([]byte("cat"), []byte("meow")))
+
+	// crash: process dies here. no Close, no final sync, no cleanup.
+	// mt is dead from this line on.
+	mt = nil
+	_ = mt
+
+	mt2 := openMemtable(t, path)
+	defer mt2.Close()
+
+	// an overwritten key replays to its LAST value, not its first
+	val, found := mt2.Get([]byte("cat"))
+	require.True(t, found)
+	require.Equal(t, "meow", string(val))
+
+	// a key written once and never touched again
+	val, found = mt2.Get([]byte("elephantine"))
+	require.True(t, found)
+	require.Equal(t, "big", string(val))
+
+	// empty value is a value: found, and distinct from a miss
+	val, found = mt2.Get([]byte("empty"))
+	require.True(t, found, "an empty value is stored data, not an absent key")
+	require.Empty(t, val)
+
+	// the tombstone survived the crash: dog stays deleted even though its
+	// Put is still sitting in the WAL ahead of the Delete
+	val, found = mt2.Get([]byte("dog"))
+	require.False(t, found, "a Delete replayed after its Put must still win")
+	require.Nil(t, val)
+
+	// a key that was never written stays missing
+	val, found = mt2.Get([]byte("ghost"))
+	require.False(t, found)
+	require.Nil(t, val)
+
+	// seqs resume past the highest on disk (6 writes => seqs 0..5)
+	require.Equal(t, uint64(6), mt2.nextSeq, "replay must resume after the highest seq on disk")
+
+	// and a post-crash write shadows the replayed one
+	require.NoError(t, mt2.Put([]byte("cat"), []byte("kebap")))
+	val, found = mt2.Get([]byte("cat"))
+	require.True(t, found)
+	require.Equal(t, "kebap", string(val))
+	require.Equal(t, uint64(7), mt2.nextSeq)
+
+	// post-crash writes land in the same WAL, appended after the old ones
+	entries, err := wal.Replay(path)
+	require.NoError(t, err)
+	require.Len(t, entries, 7, "reopening appends to the WAL, it does not restart it")
+	require.Equal(t, uint64(6), entries[6].Seq)
+	require.Equal(t, "cat", string(entries[6].Key))
+	require.Equal(t, "kebap", string(entries[6].Value))
+}
+
+// approxSize drives the flush trigger. A reopened memtable that reports zero
+// would never flush and grow past its threshold unbounded.
+func TestReplayRestoresApproximateSize(t *testing.T) {
+	mt, path := newMemtable(t)
+
+	require.NoError(t, mt.Put([]byte("cat"), []byte("purr")))
+	require.NoError(t, mt.Delete([]byte("dog")))
+	require.NoError(t, mt.Put([]byte("elephantine"), []byte("big")))
+	sizeBeforeCrash := mt.approxSize
+
+	mt2 := openMemtable(t, path)
+	defer mt2.Close()
+
+	require.Equal(t, sizeBeforeCrash, mt2.approxSize,
+		"replay must rebuild the size counter the same way mutate accumulates it")
+	require.NotZero(t, mt2.approxSize)
+}
+
+// New creates the WAL file before the first Put, so a crash in that window
+// leaves a real, empty, uncorrupted WAL on disk.
+func TestReplayFromEmptyWAL(t *testing.T) {
+	_, path := newMemtable(t)
+
+	mt2 := openMemtable(t, path)
+	defer mt2.Close()
+
+	require.Equal(t, uint64(0), mt2.nextSeq, "an empty WAL must resume exactly where New starts")
+	require.Equal(t, uint64(0), mt2.approxSize)
+
+	_, found := mt2.Get([]byte("cat"))
+	require.False(t, found)
+
+	// the reopened memtable is writable, and its first seq is still 0
+	require.NoError(t, mt2.Put([]byte("cat"), []byte("purr")))
+	entries, err := wal.Replay(path)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, uint64(0), entries[0].Seq)
+}
+
+// One reopen can look correct while still truncating the file: session 2's own
+// writes replay fine because they are all that is left. Only a third session
+// proves the WAL is appended to and never restarted.
+func TestReplayAcrossTwoReopens(t *testing.T) {
+	mt, path := newMemtable(t)
+	require.NoError(t, mt.Put([]byte("cat"), []byte("purr")))
+
+	mt2 := openMemtable(t, path)
+	require.NoError(t, mt2.Put([]byte("dog"), []byte("woof")))
+	require.NoError(t, mt2.Delete([]byte("cat")))
+
+	mt3 := openMemtable(t, path)
+	defer mt3.Close()
+
+	_, found := mt3.Get([]byte("cat"))
+	require.False(t, found, "a tombstone written in session 2 must outlive session 2")
+
+	val, found := mt3.Get([]byte("dog"))
+	require.True(t, found)
+	require.Equal(t, "woof", string(val))
+
+	require.Equal(t, uint64(3), mt3.nextSeq, "seqs run across sessions, they do not restart")
+
+	entries, err := wal.Replay(path)
+	require.NoError(t, err)
+	require.Len(t, entries, 3, "every session appends to the same WAL")
 }

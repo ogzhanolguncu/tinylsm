@@ -18,9 +18,22 @@ type Writer struct {
 func NewWriter(path string) (*Writer, error) {
 	dir := filepath.Dir(path)
 	name := filepath.Base(path)
-	f, err := createWALFile(dir, name)
+	f, err := openWALFile(dir, name, os.O_CREATE|os.O_EXCL)
 	if err != nil {
 		return nil, fmt.Errorf("init wal file: %w", err)
+	}
+	return &Writer{
+		f:    f,
+		path: path,
+	}, nil
+}
+
+func OpenWriter(path string) (*Writer, error) {
+	dir := filepath.Dir(path)
+	name := filepath.Base(path)
+	f, err := openWALFile(dir, name, 0)
+	if err != nil {
+		return nil, fmt.Errorf("open wal file: %w", err)
 	}
 	return &Writer{
 		f:    f,
@@ -50,7 +63,13 @@ func (w *Writer) Append(e Entry) error {
 	return nil
 }
 
-func createWALFile(dir, name string) (file *os.File, err error) {
+// openWALFile opens dir/name for appending. flag decides create-new
+// (O_CREATE|O_EXCL, fails if the file exists) from open-existing (fails if it
+// does not). Creating adds a directory entry, so that case fsyncs the parent
+// dir too — otherwise a crash can lose the file's name while keeping its bytes.
+func openWALFile(dir, name string, flag int) (file *os.File, err error) {
+	perms := os.O_WRONLY | os.O_APPEND | flag
+
 	d, err := os.Open(dir)
 	if err != nil {
 		return nil, fmt.Errorf("open wal dir: %w", err)
@@ -58,7 +77,7 @@ func createWALFile(dir, name string) (file *os.File, err error) {
 	defer func() {
 		_ = d.Close()
 	}()
-	f, err := os.OpenFile(filepath.Join(dir, name), os.O_WRONLY|os.O_APPEND|os.O_EXCL|os.O_CREATE, 0o644)
+	f, err := os.OpenFile(filepath.Join(dir, name), perms, 0o644)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return nil, fmt.Errorf("wal file %s already exists: %w", name, err)
@@ -70,8 +89,10 @@ func createWALFile(dir, name string) (file *os.File, err error) {
 			_ = f.Close()
 		}
 	}()
-	if err = d.Sync(); err != nil {
-		return nil, fmt.Errorf("sync wal dir: %w", err)
+	if flag&os.O_CREATE != 0 {
+		if err = d.Sync(); err != nil {
+			return nil, fmt.Errorf("sync wal dir: %w", err)
+		}
 	}
 	return f, nil
 }

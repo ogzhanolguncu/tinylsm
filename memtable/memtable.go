@@ -22,7 +22,7 @@ type Memtable struct {
 	skiplist   *sl.SkipList
 	writer     *wal.Writer
 	nextSeq    uint64
-	mu         sync.RWMutex
+	mu         sync.Mutex
 	approxSize uint64
 	closed     atomic.Bool
 }
@@ -39,6 +39,48 @@ func New(path string, seed int64) (*Memtable, error) {
 		writer:     writer,
 		nextSeq:    0,
 		approxSize: 0,
+	}, nil
+}
+
+func Open(path string, seed int64) (*Memtable, error) {
+	entries, err := wal.Replay(path)
+	if err != nil {
+		return nil, fmt.Errorf("memtable: open fail: %w", err)
+	}
+
+	writer, err := wal.OpenWriter(path)
+	if err != nil {
+		return nil, err
+	}
+	skiplist := sl.New(keys.Compare, seed)
+
+	var approxSize, nextSeq uint64
+
+	if len(entries) > 0 {
+		for _, e := range entries {
+			if e.Seq > nextSeq {
+				nextSeq = e.Seq
+			}
+		}
+		nextSeq++
+	}
+
+	for _, e := range entries {
+		ik, err := keys.Encode(e.Key, e.Seq, keys.Kind(e.Kind))
+		if err != nil {
+			_ = writer.Close()
+			return nil, fmt.Errorf("memtable: encode fail: %w", err)
+		}
+
+		skiplist.Insert(ik, e.Value)
+		approxSize += uint64(len(ik)) + uint64(len(e.Value))
+	}
+
+	return &Memtable{
+		skiplist:   skiplist,
+		writer:     writer,
+		nextSeq:    nextSeq,
+		approxSize: approxSize,
 	}, nil
 }
 
