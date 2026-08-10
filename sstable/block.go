@@ -10,6 +10,9 @@ package sstable
 import (
 	"encoding/binary"
 	"hash/crc32"
+
+	"github.com/ogzhanolguncu/tinylsm/keys"
+	"github.com/ogzhanolguncu/tinylsm/pkg/contract"
 )
 
 var castagnoli = crc32.MakeTable(crc32.Castagnoli)
@@ -33,6 +36,9 @@ func newBlockBuilder() *blockBuilder {
 }
 
 func (b *blockBuilder) Add(key, val []byte) {
+	contract.Require(b.Empty() || keys.Compare(key, b.lastKey) > 0,
+		"blockBuilder.Add: key %x is not greater than lastKey %x", key, b.lastKey)
+
 	b.buf = binary.AppendUvarint(b.buf, uint64(len(key)))
 	b.buf = append(b.buf, key...)
 	b.buf = binary.AppendUvarint(b.buf, uint64(len(val)))

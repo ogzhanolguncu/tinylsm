@@ -6,6 +6,7 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/ogzhanolguncu/tinylsm/pkg/contract"
 	"github.com/stretchr/testify/require"
 )
 
@@ -140,6 +141,10 @@ func TestCompareIsAntisymmetric(t *testing.T) {
 // Compare has no error return, so a malformed key must fail loudly and name the
 // offending argument rather than die on a slice-bounds panic.
 func TestComparePanicsOnShortKey(t *testing.T) {
+	if !contract.Enabled {
+		t.Skip("contracts compiled out")
+	}
+
 	valid := mustEncode(t, "foo", 1)
 
 	for n := range trailerSize {
