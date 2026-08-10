@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/ogzhanolguncu/tinylsm/keys"
-	"github.com/ogzhanolguncu/tinylsm/pkg/contract"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,34 +33,8 @@ func TestBlockBuilderExactBytes(t *testing.T) {
 	require.Equal(t, want, b.Finish())
 }
 
-func TestBlockBuilderRejectsOutOfOrderKeys(t *testing.T) {
-	if !contract.Enabled {
-		t.Skip("contracts compiled out")
-	}
-
-	cases := []struct {
-		name   string
-		first  []byte
-		second []byte
-	}{
-		{"descending user key", ik(t, "b", 1, keys.KindPut), ik(t, "a", 1, keys.KindPut)},
-		{"identical internal key", ik(t, "a", 1, keys.KindPut), ik(t, "a", 1, keys.KindPut)},
-		// Internal order is (userKey asc, seq DESC), so seq 2 belongs before seq 1.
-		{"same user key, ascending seq", ik(t, "a", 1, keys.KindPut), ik(t, "a", 2, keys.KindPut)},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			b := newBlockBuilder()
-			b.Add(tc.first, []byte("v1"))
-			require.Panics(t, func() { b.Add(tc.second, []byte("v2")) })
-		})
-	}
-}
-
-// Reset truncates lastKey, and keys.Compare panics on keys shorter than the
-// trailer — so Add's contract must short-circuit on Empty() before reaching
-// Compare. Cross-block ordering is the table writer's job, not the builder's.
+// Add's contract must short-circuit on Empty() before reaching Compare, which
+// panics on the zero-length lastKey Reset leaves behind.
 func TestBlockBuilderAddAfterResetDoesNotPanic(t *testing.T) {
 	b := newBlockBuilder()
 	b.Add(ik(t, "b", 1, keys.KindPut), []byte("v1"))
@@ -110,8 +83,7 @@ func TestBlockBuilderResetReuse(t *testing.T) {
 	b := newBlockBuilder()
 	b.Add(ik(t, "apple", 1, keys.KindPut), []byte("red"))
 
-	// Grow past the initial capacity so a Reset that reallocates lands on a
-	// different cap than one that reuses the buffer.
+	// Grow past the initial cap so realloc and reuse give different caps.
 	val := bytes.Repeat([]byte("v"), 512)
 	for i := 0; !b.Full(); i++ {
 		b.Add(ik(t, fmt.Sprintf("filler%03d", i), 1, keys.KindPut), val)

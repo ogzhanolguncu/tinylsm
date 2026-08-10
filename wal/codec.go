@@ -39,10 +39,8 @@ const minRecordSize = headerSize + pOffKeyLen + 2 // two 1-byte varints: keyLen=
 
 var Castagnoli = crc32.MakeTable(crc32.Castagnoli)
 
-// Kind is an alias, not a distinct type: the WAL records the same operation
-// kinds that an internal key carries, and keys is the lower-level package that
-// owns the definition. Aliasing (rather than `type Kind keys.Kind`) means no
-// conversion is needed at the boundary.
+// Alias, not a new type — keys owns the definition, so no conversion at the
+// boundary.
 type Kind = keys.Kind
 
 const (

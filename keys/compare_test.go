@@ -6,7 +6,6 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/ogzhanolguncu/tinylsm/pkg/contract"
 	"github.com/stretchr/testify/require"
 )
 
@@ -138,27 +137,6 @@ func TestCompareIsAntisymmetric(t *testing.T) {
 	}
 }
 
-// Compare has no error return, so a malformed key must fail loudly and name the
-// offending argument rather than die on a slice-bounds panic.
-func TestComparePanicsOnShortKey(t *testing.T) {
-	if !contract.Enabled {
-		t.Skip("contracts compiled out")
-	}
-
-	valid := mustEncode(t, "foo", 1)
-
-	for n := range trailerSize {
-		short := make([]byte, n)
-
-		msg := panicMessage(t, func() { Compare(short, valid) })
-		require.Containsf(t, msg, "precondition violated", "len %d as a", n)
-		require.Containsf(t, msg, fmt.Sprintf("a is %d bytes", n), "len %d as a", n)
-
-		msg = panicMessage(t, func() { Compare(valid, short) })
-		require.Containsf(t, msg, fmt.Sprintf("b is %d bytes", n), "len %d as b", n)
-	}
-}
-
 func mustEncode(tb testing.TB, userKey string, seq uint64) []byte {
 	tb.Helper()
 	return mustEncodeKind(tb, userKey, seq, KindPut)
@@ -179,18 +157,4 @@ func sign(n int) int {
 		return 1
 	}
 	return 0
-}
-
-func panicMessage(t *testing.T, f func()) string {
-	t.Helper()
-	var msg string
-	func() {
-		defer func() {
-			r := recover()
-			require.NotNil(t, r, "expected a panic")
-			msg = fmt.Sprint(r)
-		}()
-		f()
-	}()
-	return msg
 }

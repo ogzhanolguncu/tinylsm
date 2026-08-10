@@ -36,6 +36,9 @@ func newBlockBuilder() *blockBuilder {
 }
 
 func (b *blockBuilder) Add(key, val []byte) {
+	contract.Require(len(key) >= keys.TrailerSize,
+		"blockBuilder.Add: key %x is %d bytes, an internal key needs at least %d",
+		key, len(key), keys.TrailerSize)
 	contract.Require(b.Empty() || keys.Compare(key, b.lastKey) > 0,
 		"blockBuilder.Add: key %x is not greater than lastKey %x", key, b.lastKey)
 

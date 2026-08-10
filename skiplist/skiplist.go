@@ -4,6 +4,8 @@ import (
 	"math/rand"
 	"sync"
 	"sync/atomic"
+
+	"github.com/ogzhanolguncu/tinylsm/pkg/contract"
 )
 
 const (
@@ -31,6 +33,8 @@ type (
 )
 
 func New(cmp Comparator, seed int64) *SkipList {
+	contract.Require(cmp != nil, "skiplist.New: comparator must not be nil")
+
 	sl := &SkipList{
 		head: &Node{
 			fp: make([]atomic.Pointer[Node], kMaxHeight),
@@ -68,6 +72,11 @@ func (s *SkipList) Insert(key, val []byte) {
 		}
 		update[lvl] = cur
 	}
+
+	// seqnums make every insert unique, so a duplicate is a caller bug.
+	first := update[0].next(0) // first node >= key, or nil
+	contract.Require(first == nil || s.comparator(first.key, key) != 0,
+		"skiplist.Insert: duplicate key %x", key)
 
 	h := s.randomHeight()
 	oldH := s.height.Load()
@@ -119,11 +128,25 @@ func (s *SkipList) NewIterator() *SkipListIterator {
 	}
 }
 
-func (it *SkipListIterator) SeekToFirst()  { it.cursor = it.list.head.next(0) }
-func (it *SkipListIterator) Valid() bool   { return it.cursor != nil }
-func (it *SkipListIterator) Key() []byte   { return it.cursor.key }
-func (it *SkipListIterator) Value() []byte { return it.cursor.val }
-func (it *SkipListIterator) Next()         { it.cursor = it.cursor.next(0) }
+func (it *SkipListIterator) SeekToFirst() { it.cursor = it.list.head.next(0) }
+func (it *SkipListIterator) Valid() bool  { return it.cursor != nil }
+
+// Key, Value, and Next require a Valid iterator; without the contract they
+// nil-deref.
+func (it *SkipListIterator) Key() []byte {
+	contract.Require(it.Valid(), "SkipListIterator.Key: iterator is exhausted")
+	return it.cursor.key
+}
+
+func (it *SkipListIterator) Value() []byte {
+	contract.Require(it.Valid(), "SkipListIterator.Value: iterator is exhausted")
+	return it.cursor.val
+}
+
+func (it *SkipListIterator) Next() {
+	contract.Require(it.Valid(), "SkipListIterator.Next: iterator is exhausted")
+	it.cursor = it.cursor.next(0)
+}
 
 func (it *SkipListIterator) Seek(key []byte) {
 	cur := it.list.head

@@ -40,16 +40,6 @@ func TestGetEmpty(t *testing.T) {
 	require.False(t, ok, "Get on empty list")
 }
 
-func TestOverwrite(t *testing.T) {
-	s := newList()
-	s.Insert([]byte("k"), []byte("v1"))
-	s.Insert([]byte("k"), []byte("v2"))
-
-	got, ok := s.Get([]byte("k"))
-	require.True(t, ok, "Get(k)")
-	require.Equal(t, "v2", string(got), "want latest value")
-}
-
 // walkKeys returns level-0 keys in order (same-package access to internals).
 func walkKeys(s *SkipList) [][]byte {
 	var out [][]byte

@@ -29,7 +29,7 @@ func TestEncodeDecodeRoundTrip(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ik, err := Encode(tc.userKey, tc.seq, tc.kind)
 			require.NoError(t, err)
-			require.Len(t, ik, len(tc.userKey)+trailerSize)
+			require.Len(t, ik, len(tc.userKey)+TrailerSize)
 
 			uk, seq, kind, err := Decode(ik)
 			require.NoError(t, err)
@@ -47,7 +47,7 @@ func TestTrailerPackingIsolatesFields(t *testing.T) {
 	ik, err := Encode([]byte("k"), MaxSeq, KindDelete)
 	require.NoError(t, err)
 
-	trailer := binary.LittleEndian.Uint64(ik[len(ik)-trailerSize:])
+	trailer := binary.LittleEndian.Uint64(ik[len(ik)-TrailerSize:])
 	require.Equal(t, uint64(MaxSeq), trailer>>8, "seq occupies the top 56 bits")
 	require.Equal(t, uint64(KindDelete), trailer&0xff, "kind occupies the low byte")
 
@@ -75,7 +75,7 @@ func TestEncodeRejectsSeqOverflow(t *testing.T) {
 
 // Anything shorter than a bare trailer cannot hold a key + trailer.
 func TestDecodeRejectsTooShort(t *testing.T) {
-	for n := range trailerSize {
+	for n := range TrailerSize {
 		_, _, _, err := Decode(make([]byte, n))
 		require.ErrorIsf(t, err, ErrKeyTooShort, "len %d must be rejected", n)
 	}

@@ -2,8 +2,6 @@
 
 package contract
 
-// Enabled is a constant false in this build, so `if contract.Enabled { ... }`
-// blocks are removed entirely by dead-code elimination.
 const Enabled = false
 
 func Require(cond bool, msg string, args ...any)   {}

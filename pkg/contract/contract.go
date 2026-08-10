@@ -1,19 +1,10 @@
 //go:build !nocontract
 
 // Package contract provides executable preconditions, postconditions, and
-// invariants.
+// invariants. Build with -tags nocontract to compile them out.
 //
-// Contracts are on by default. Build with `-tags nocontract` to compile them
-// out: Enabled becomes an untyped constant false, the check functions become
-// empty, and the compiler eliminates both the calls and any `if
-// contract.Enabled { ... }` block wrapped around them.
-//
-// Note the limit of that elimination: arguments to a call are still evaluated.
-//
-//	contract.Require(expensiveCheck(x), "...")   // expensiveCheck STILL runs
-//
-// For an assertion whose condition costs real work on a hot path, guard it so
-// the condition itself is inside the dead branch:
+// Stripping removes the call, not its arguments — a bare
+// Require(expensiveCheck(x), ...) still runs expensiveCheck. Guard those:
 //
 //	if contract.Enabled {
 //	    contract.Require(expensiveCheck(x), "...")
@@ -22,8 +13,7 @@ package contract
 
 import "fmt"
 
-// Enabled reports whether contracts are compiled in. It is a constant, so it
-// is usable as a compile-time switch.
+// Enabled is a constant, so the guard above is dead-code eliminated.
 const Enabled = true
 
 func Require(cond bool, msg string, args ...any) {

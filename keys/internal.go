@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	trailerSize = 8
+	TrailerSize = 8
 	MaxSeq      = 1<<56 - 1
 )
 
@@ -17,8 +17,7 @@ var (
 	ErrEmptyUserKey = errors.New("keys: empty user key")
 )
 
-// Kind is the operation an internal key records. It occupies the low byte of
-// the 8-byte trailer, so it must fit in 8 bits.
+// Kind occupies the low byte of the trailer, so it must fit in 8 bits.
 type Kind uint8
 
 const (
@@ -48,7 +47,7 @@ func Encode(userKey []byte, seq uint64, kind Kind) ([]byte, error) {
 	if uint64(kind) > 0x03 {
 		return nil, ErrKindOverflow
 	}
-	buf := make([]byte, len(userKey)+trailerSize)
+	buf := make([]byte, len(userKey)+TrailerSize)
 	copy(buf, userKey)
 	binary.LittleEndian.PutUint64(buf[len(userKey):], seq<<8|uint64(kind))
 	return buf, nil
@@ -56,10 +55,10 @@ func Encode(userKey []byte, seq uint64, kind Kind) ([]byte, error) {
 
 // Decode returns userKey (aliasing ik, not a copy), seq, and kind.
 func Decode(ik []byte) (userKey []byte, seq uint64, kind Kind, err error) {
-	if len(ik) < trailerSize {
+	if len(ik) < TrailerSize {
 		return nil, 0, 0, ErrKeyTooShort
 	}
-	userKey = ik[:len(ik)-trailerSize]
+	userKey = ik[:len(ik)-TrailerSize]
 	trailer := binary.LittleEndian.Uint64(ik[len(userKey):])
 	seq = trailer >> 8
 	kind = Kind(trailer & 0xff)
