@@ -4,6 +4,9 @@
 BENCH ?= .
 # samples per bench for benchstat significance
 COUNT ?= 6
+# package to fuzz/bench: make fuzz PKG=./sstable FUZZ=FuzzBlockDecode
+PKG ?= .
+FUZZ ?= Fuzz
 
 run:
 	go run .
@@ -19,7 +22,7 @@ cover:
 	go tool cover -func=coverage.out
 
 fuzz:
-	go test -fuzz=Fuzz -fuzztime=30s .
+	go test -fuzz='$(FUZZ)' -fuzztime=30s $(PKG)
 
 bench:
-	go test -bench='$(BENCH)' -count=$(COUNT) -benchmem -run=^$$ .
+	go test -bench='$(BENCH)' -count=$(COUNT) -benchmem -run=^$$ $(PKG)

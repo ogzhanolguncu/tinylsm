@@ -5,7 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
-	"math/bits"
+
+	"github.com/ogzhanolguncu/tinylsm/pkg/uvarint"
 )
 
 type Entry struct {
@@ -73,7 +74,7 @@ func buildPayload(entry Entry) ([]byte, error) {
 		return nil, ErrInvalidInput
 	}
 
-	p := make([]byte, 0, pOffKeyLen+sizeUvarint(uint64(len(key)))+len(key)+sizeUvarint(uint64(len(value)))+len(value))
+	p := make([]byte, 0, pOffKeyLen+uvarint.SizeUvarint(uint64(len(key)))+len(key)+uvarint.SizeUvarint(uint64(len(value)))+len(value))
 	p = binary.LittleEndian.AppendUint64(p, seq)
 	p = append(p, byte(kind))
 	p = binary.AppendUvarint(p, uint64(len(key)))
@@ -179,11 +180,4 @@ func decode(rec []byte) (Entry, int, error) {
 		Seq:   seq,
 		Kind:  kind,
 	}, off + headerSize, nil
-}
-
-func sizeUvarint(x uint64) int {
-	if x == 0 {
-		return 1
-	}
-	return (bits.Len64(x) + 6) / 7
 }
