@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hash/crc32"
 
+	"github.com/ogzhanolguncu/tinylsm/keys"
 	"github.com/ogzhanolguncu/tinylsm/pkg/uvarint"
 )
 
@@ -38,23 +39,16 @@ const minRecordSize = headerSize + pOffKeyLen + 2 // two 1-byte varints: keyLen=
 
 var Castagnoli = crc32.MakeTable(crc32.Castagnoli)
 
-type Kind uint8
+// Kind is an alias, not a distinct type: the WAL records the same operation
+// kinds that an internal key carries, and keys is the lower-level package that
+// owns the definition. Aliasing (rather than `type Kind keys.Kind`) means no
+// conversion is needed at the boundary.
+type Kind = keys.Kind
 
 const (
-	KindPut    Kind = iota // key → value
-	KindDelete             // tombstone: key present, value empty
+	KindPut    = keys.KindPut
+	KindDelete = keys.KindDelete
 )
-
-func (k Kind) String() string {
-	switch k {
-	case KindPut:
-		return "put"
-	case KindDelete:
-		return "delete"
-	default:
-		return "unknown"
-	}
-}
 
 func encode(entry Entry) ([]byte, error) {
 	p, err := buildPayload(entry)

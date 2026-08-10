@@ -3,8 +3,6 @@ package keys
 import (
 	"encoding/binary"
 	"errors"
-
-	"github.com/ogzhanolguncu/tinylsm/wal"
 )
 
 const (
@@ -19,12 +17,25 @@ var (
 	ErrEmptyUserKey = errors.New("keys: empty user key")
 )
 
-type Kind wal.Kind
+// Kind is the operation an internal key records. It occupies the low byte of
+// the 8-byte trailer, so it must fit in 8 bits.
+type Kind uint8
 
 const (
-	KindPut    = Kind(wal.KindPut)
-	KindDelete = Kind(wal.KindDelete)
+	KindPut    Kind = iota // key → value
+	KindDelete             // tombstone: key present, value empty
 )
+
+func (k Kind) String() string {
+	switch k {
+	case KindPut:
+		return "put"
+	case KindDelete:
+		return "delete"
+	default:
+		return "unknown"
+	}
+}
 
 // Encode writes userKey bytes, then an 8-byte little-endian trailer (seq<<8 | kind).
 func Encode(userKey []byte, seq uint64, kind Kind) ([]byte, error) {
