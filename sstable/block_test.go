@@ -151,6 +151,40 @@ func TestBlockIterWalksAllEntries(t *testing.T) {
 	require.False(t, it.Valid(), "iterator must be exhausted after last entry")
 }
 
+// newBlock and a full iteration must never panic, whatever bytes arrive.
+// Raw input alone would only ever exercise the checksum branch (the fuzzer
+// can't guess valid CRCs), so each input is also retried as a payload with
+// a correct CRC appended, which sends arbitrary structure into the walk.
+func FuzzBlockDecodeNeverPanics(f *testing.F) {
+	b := newBlockBuilder()
+	if k, err := keys.Encode([]byte("cat"), 7, keys.KindPut); err == nil {
+		b.Add(k, []byte("purr"))
+		f.Add(b.Finish())
+	}
+	f.Add([]byte{})
+	f.Add([]byte{0x80})
+	f.Add(binary.AppendUvarint(nil, 1<<30))
+	f.Add(binary.AppendUvarint(nil, 1<<63))
+
+	walk := func(data []byte) {
+		blk, err := newBlock(data)
+		if err != nil {
+			return
+		}
+		it := &blockIter{b: blk}
+		for it.Valid() {
+			_ = it.Key()
+			_ = it.Value()
+			it.Next()
+		}
+	}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		walk(data)
+		crc := crc32.Checksum(data, castagnoli)
+		walk(binary.LittleEndian.AppendUint32(bytes.Clone(data), crc))
+	})
+}
+
 func TestNewBlockRejectsCorruption(t *testing.T) {
 	mk := func(payload []byte) []byte {
 		return binary.LittleEndian.AppendUint32(payload, crc32.Checksum(payload, castagnoli))
