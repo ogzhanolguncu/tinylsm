@@ -122,3 +122,42 @@ func newBlock(data []byte) (*block, error) {
 
 	return block, nil
 }
+
+type blockIter struct {
+	b *block
+	i int
+}
+
+func (b *blockIter) Valid() bool {
+	return b.i < len(b.b.offsets)
+}
+
+func (b *blockIter) Key() []byte {
+	contract.Require(b.Valid(), "blockIter.Key: iterator is exhausted")
+	off := b.b.offsets[b.i]
+
+	keyLen, n := binary.Uvarint(b.b.data[off:])
+	off += n
+
+	key := b.b.data[off : off+int(keyLen)]
+	return key
+}
+
+func (b *blockIter) Value() []byte {
+	contract.Require(b.Valid(), "blockIter.Value: iterator is exhausted")
+	off := b.b.offsets[b.i]
+
+	keyLen, n := binary.Uvarint(b.b.data[off:])
+	off += n + int(keyLen)
+
+	valLen, n := binary.Uvarint(b.b.data[off:])
+	off += n
+	value := b.b.data[off : off+int(valLen)]
+
+	return value
+}
+
+func (b *blockIter) Next() {
+	contract.Require(b.Valid(), "blockIter.Next: iterator is exhausted")
+	b.i++
+}

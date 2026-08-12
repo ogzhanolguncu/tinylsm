@@ -51,3 +51,17 @@ func TestBlockBuilderRejectsOutOfOrderKeys(t *testing.T) {
 		})
 	}
 }
+
+func TestBlockIterRejectsUseWhenExhausted(t *testing.T) {
+	b := newBlockBuilder()
+	b.Add(ik(t, "a", 1, keys.KindPut), []byte("v"))
+	blk, err := newBlock(b.Finish())
+	require.NoError(t, err)
+
+	it := &blockIter{b: blk}
+	it.Next() // consume the only entry
+
+	require.Panics(t, func() { it.Key() })
+	require.Panics(t, func() { it.Value() })
+	require.Panics(t, func() { it.Next() })
+}

@@ -122,6 +122,35 @@ func TestNewBlockRoundTrip(t *testing.T) {
 	require.Len(t, blk.data, 24, "trailer must be sliced off")
 }
 
+func TestBlockIterWalksAllEntries(t *testing.T) {
+	entries := []struct {
+		key, val []byte
+	}{
+		{ik(t, "a", 3, keys.KindPut), []byte("v1")},
+		{ik(t, "b", 2, keys.KindDelete), nil}, // tombstone: zero-length value
+		{ik(t, "c", 1, keys.KindPut), bytes.Repeat([]byte("x"), 200)},
+	}
+	b := newBlockBuilder()
+	for _, e := range entries {
+		b.Add(e.key, e.val)
+	}
+	blk, err := newBlock(b.Finish())
+	require.NoError(t, err)
+
+	it := &blockIter{b: blk}
+	for i, e := range entries {
+		require.True(t, it.Valid(), "entry %d", i)
+		require.Equal(t, e.key, it.Key(), "entry %d", i)
+		if len(e.val) == 0 {
+			require.Empty(t, it.Value(), "entry %d", i)
+		} else {
+			require.Equal(t, e.val, it.Value(), "entry %d", i)
+		}
+		it.Next()
+	}
+	require.False(t, it.Valid(), "iterator must be exhausted after last entry")
+}
+
 func TestNewBlockRejectsCorruption(t *testing.T) {
 	mk := func(payload []byte) []byte {
 		return binary.LittleEndian.AppendUint32(payload, crc32.Checksum(payload, castagnoli))
