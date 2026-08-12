@@ -9,6 +9,8 @@ package sstable
 
 import (
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"hash/crc32"
 
 	"github.com/ogzhanolguncu/tinylsm/keys"
@@ -16,6 +18,11 @@ import (
 )
 
 var castagnoli = crc32.MakeTable(crc32.Castagnoli)
+
+var (
+	ErrBlockChecksum = errors.New("sstable: block checksum mismatch")
+	ErrBlockCorrupt  = errors.New("sstable: corrupt block")
+)
 
 const (
 	blockTrailerSize = 4
@@ -67,4 +74,51 @@ func (b *blockBuilder) Finish() []byte {
 func (b *blockBuilder) Reset() {
 	b.buf = b.buf[:0]
 	b.lastKey = b.lastKey[:0]
+}
+
+type block struct {
+	data    []byte
+	offsets []int
+}
+
+func newBlock(data []byte) (*block, error) {
+	if len(data) <= blockTrailerSize {
+		return nil, fmt.Errorf("%w: too short for trailer", ErrBlockCorrupt)
+	}
+	crc := binary.LittleEndian.Uint32(data[len(data)-4:])
+	data = data[:len(data)-4]
+	if crc32.Checksum(data, castagnoli) != crc {
+		return nil, ErrBlockChecksum
+	}
+
+	block := &block{data: data}
+
+	off := 0
+	for off != len(data) {
+		block.offsets = append(block.offsets, off)
+		keyLen, n := binary.Uvarint(data[off:])
+		if n <= 0 {
+			return nil, fmt.Errorf("%w: bad keyLen varint", ErrBlockCorrupt)
+		}
+		if keyLen < keys.TrailerSize {
+			return nil, fmt.Errorf("%w: key shorter than trailer", ErrBlockCorrupt)
+		}
+		off += n
+		if rem := uint64(len(data) - off); keyLen > rem {
+			return nil, fmt.Errorf("%w: keyLen overruns block", ErrBlockCorrupt)
+		}
+		off += int(keyLen)
+
+		valLen, n := binary.Uvarint(data[off:])
+		if n <= 0 {
+			return nil, fmt.Errorf("%w: bad valLen varint", ErrBlockCorrupt)
+		}
+		off += n
+		if rem := uint64(len(data) - off); valLen > rem {
+			return nil, fmt.Errorf("%w: valLen overruns block", ErrBlockCorrupt)
+		}
+		off += int(valLen)
+	}
+
+	return block, nil
 }

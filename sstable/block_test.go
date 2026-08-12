@@ -107,3 +107,48 @@ func TestBlockBuilderResetReuse(t *testing.T) {
 	require.NotEqual(t, blockA, blockB)
 	require.Equal(t, capBefore, cap(b.buf), "Reset must retain the allocation")
 }
+
+func TestNewBlockRoundTrip(t *testing.T) {
+	b := newBlockBuilder()
+	b.Add(ik(t, "a", 2, keys.KindPut), []byte("v1"))
+	b.Add(ik(t, "b", 1, keys.KindDelete), nil) // tombstone: zero-length value
+
+	blk, err := newBlock(b.Finish())
+	require.NoError(t, err)
+
+	// entry 0: 1 keyLen byte + 9 key + 1 valLen byte + 2 val = 13
+	// entry 1: 1 + 9 + 1 + 0 = 11
+	require.Equal(t, []int{0, 13}, blk.offsets)
+	require.Len(t, blk.data, 24, "trailer must be sliced off")
+}
+
+func TestNewBlockRejectsCorruption(t *testing.T) {
+	mk := func(payload []byte) []byte {
+		return binary.LittleEndian.AppendUint32(payload, crc32.Checksum(payload, castagnoli))
+	}
+	key := ik(t, "a", 1, keys.KindPut)
+	keyPrefix := append(binary.AppendUvarint(nil, uint64(len(key))), key...)
+
+	b := newBlockBuilder()
+	b.Add(key, []byte("v"))
+	flipped := bytes.Clone(b.Finish())
+	flipped[0] ^= 0xFF
+
+	cases := map[string]struct {
+		block []byte
+		want  error
+	}{
+		"nil":               {nil, ErrBlockCorrupt},
+		"trailer only":      {mk(nil), ErrBlockCorrupt},
+		"flipped byte":      {flipped, ErrBlockChecksum},
+		"cut keyLen varint": {mk([]byte{0x80}), ErrBlockCorrupt},
+		"key below trailer": {mk(binary.AppendUvarint(nil, 2)), ErrBlockCorrupt},
+		"keyLen overrun":    {mk(binary.AppendUvarint(nil, 1<<30)), ErrBlockCorrupt},
+		"missing valLen":    {mk(bytes.Clone(keyPrefix)), ErrBlockCorrupt},
+		"valLen sign bit":   {mk(binary.AppendUvarint(bytes.Clone(keyPrefix), 1<<63)), ErrBlockCorrupt},
+	}
+	for name, tc := range cases {
+		_, err := newBlock(tc.block)
+		require.ErrorIs(t, err, tc.want, name)
+	}
+}
