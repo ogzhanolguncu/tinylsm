@@ -12,9 +12,17 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"os"
+	"path/filepath"
 
 	"github.com/ogzhanolguncu/tinylsm/keys"
 	"github.com/ogzhanolguncu/tinylsm/pkg/contract"
+)
+
+const (
+	footerSize uint64 = 24
+	// magic identifies a tinylsm SSTable.
+	magic uint64 = 0x0100004D534C7A4F
 )
 
 var castagnoli = crc32.MakeTable(crc32.Castagnoli)
@@ -160,4 +168,105 @@ func (b *blockIter) Value() []byte {
 func (b *blockIter) Next() {
 	contract.Require(b.Valid(), "blockIter.Next: iterator is exhausted")
 	b.i++
+}
+
+type indexEntry struct {
+	lastKey []byte
+	off     uint64
+	size    uint64
+}
+
+type tableWriter struct {
+	idx []indexEntry
+	bb  *blockBuilder
+	f   *os.File
+	off uint64
+}
+
+func newTableWriter(path string) (*tableWriter, error) {
+	d, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return nil, fmt.Errorf("open sst dir: %w", err)
+	}
+	defer func() {
+		_ = d.Close()
+	}()
+
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("create sst file: %w", err)
+	}
+	if err := d.Sync(); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("sync sst dir: %w", err)
+	}
+	return &tableWriter{
+		f: f, bb: newBlockBuilder(),
+	}, nil
+}
+
+func (tw *tableWriter) Add(key, val []byte) error {
+	tw.bb.Add(key, val)
+	if tw.bb.Full() {
+		return tw.flushBlock()
+	}
+	return nil
+}
+
+func (tw *tableWriter) Finish() error {
+	err := tw.flushBlock()
+	if err != nil {
+		return err
+	}
+
+	indexOff := tw.off
+
+	idxBlock := newBlockBuilder()
+	for _, e := range tw.idx {
+		val := make([]byte, 16)
+		binary.LittleEndian.PutUint64(val[0:8], e.off)
+		binary.LittleEndian.PutUint64(val[8:16], e.size)
+		idxBlock.Add(e.lastKey, val)
+	}
+	data := idxBlock.Finish()
+	if _, err := tw.f.Write(data); err != nil {
+		return err
+	}
+	indexSize := uint64(len(data))
+
+	footer := make([]byte, footerSize)
+	binary.LittleEndian.PutUint64(footer[0:8], indexOff)
+	binary.LittleEndian.PutUint64(footer[8:16], indexSize)
+	binary.LittleEndian.PutUint64(footer[16:24], magic)
+	if _, err := tw.f.Write(footer); err != nil {
+		return err
+	}
+	if err := tw.f.Sync(); err != nil {
+		return err
+	}
+	return tw.f.Close()
+}
+
+func (tw *tableWriter) flushBlock() error {
+	if tw.bb.Empty() {
+		return nil
+	}
+	data := tw.bb.Finish()
+	if _, err := tw.f.Write(data); err != nil {
+		return err
+	}
+	idxEntry := indexEntry{
+		lastKey: append([]byte(nil), tw.bb.lastKey...),
+		off:     tw.off,
+		size:    uint64(len(data)),
+	}
+	tw.idx = append(tw.idx, idxEntry)
+	tw.off += uint64(len(data))
+
+	tw.bb.Reset()
+	return nil
+}
+
+func FileName(num uint64) string {
+	return fmt.Sprintf("%09d.sst", num)
 }
