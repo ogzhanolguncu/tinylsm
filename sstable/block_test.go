@@ -215,3 +215,77 @@ func TestNewBlockRejectsCorruption(t *testing.T) {
 		require.ErrorIs(t, err, tc.want, name)
 	}
 }
+
+func TestBlockIterSeek(t *testing.T) {
+	// Distinct user keys, one version each, so ordering is pure bytewise.
+	b := newBlockBuilder()
+	b.Add(ik(t, "a", 5, keys.KindPut), []byte("va"))
+	b.Add(ik(t, "c", 5, keys.KindPut), []byte("vc"))
+	b.Add(ik(t, "e", 5, keys.KindPut), []byte("ve"))
+	blk, err := newBlock(b.Finish())
+	require.NoError(t, err)
+	require.Len(t, blk.offsets, 3)
+
+	tests := []struct {
+		name    string
+		target  []byte
+		wantIdx int
+		wantKey string // "" means the iterator must be invalid
+	}{
+		{"exact match on first", ik(t, "a", 5, keys.KindPut), 0, "a"},
+		{"exact match in middle", ik(t, "c", 5, keys.KindPut), 1, "c"},
+		{"exact match on last", ik(t, "e", 5, keys.KindPut), 2, "e"},
+		{"between keys lands on the next", ik(t, "b", 5, keys.KindPut), 1, "c"},
+		{"before every key lands on the first", ik(t, "A", 5, keys.KindPut), 0, "a"},
+		{"past the last key is invalid", ik(t, "z", 5, keys.KindPut), 3, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			it := &blockIter{b: blk}
+			it.Seek(tt.target)
+
+			require.Equal(t, tt.wantIdx, it.i)
+			if tt.wantKey == "" {
+				require.False(t, it.Valid())
+				return
+			}
+			require.True(t, it.Valid())
+			require.Equal(t, ik(t, tt.wantKey, 5, keys.KindPut), it.Key())
+			require.Equal(t, []byte("v"+tt.wantKey), it.Value())
+		})
+	}
+}
+
+// Same user key, many versions. Higher seq sorts first, so Seek(key, snapshot)
+// must land on the newest version at or below snapshot — never on a newer one.
+func TestBlockIterSeekPicksNewestVisibleVersion(t *testing.T) {
+	b := newBlockBuilder()
+	b.Add(ik(t, "k", 9, keys.KindPut), []byte("v9"))
+	b.Add(ik(t, "k", 5, keys.KindPut), []byte("v5"))
+	b.Add(ik(t, "k", 1, keys.KindPut), []byte("v1"))
+	blk, err := newBlock(b.Finish())
+	require.NoError(t, err)
+
+	tests := []struct {
+		snapshot uint64
+		wantVal  string
+	}{
+		{100, "v9"}, // newer than everything
+		{9, "v9"},   // exactly the newest
+		{7, "v5"},   // between versions: v9 is invisible
+		{5, "v5"},
+		{3, "v1"},
+		{1, "v1"},
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("snapshot_%d", tt.snapshot), func(t *testing.T) {
+			it := &blockIter{b: blk}
+			it.Seek(ik(t, "k", tt.snapshot, keys.KindPut))
+
+			require.True(t, it.Valid())
+			require.Equal(t, []byte(tt.wantVal), it.Value())
+		})
+	}
+}

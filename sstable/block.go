@@ -14,6 +14,7 @@ import (
 	"hash/crc32"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/ogzhanolguncu/tinylsm/keys"
 	"github.com/ogzhanolguncu/tinylsm/pkg/contract"
@@ -142,13 +143,7 @@ func (b *blockIter) Valid() bool {
 
 func (b *blockIter) Key() []byte {
 	contract.Require(b.Valid(), "blockIter.Key: iterator is exhausted")
-	off := b.b.offsets[b.i]
-
-	keyLen, n := binary.Uvarint(b.b.data[off:])
-	off += n
-
-	key := b.b.data[off : off+int(keyLen)]
-	return key
+	return b.keyAt(b.i)
 }
 
 func (b *blockIter) Value() []byte {
@@ -168,6 +163,22 @@ func (b *blockIter) Value() []byte {
 func (b *blockIter) Next() {
 	contract.Require(b.Valid(), "blockIter.Next: iterator is exhausted")
 	b.i++
+}
+
+func (b *blockIter) keyAt(i int) []byte {
+	off := b.b.offsets[i]
+
+	keyLen, n := binary.Uvarint(b.b.data[off:])
+	off += n
+
+	key := b.b.data[off : off+int(keyLen)]
+	return key
+}
+
+func (b *blockIter) Seek(target []byte) {
+	b.i = sort.Search(len(b.b.offsets), func(i int) bool {
+		return keys.Compare(b.keyAt(i), target) >= 0
+	})
 }
 
 type indexEntry struct {
