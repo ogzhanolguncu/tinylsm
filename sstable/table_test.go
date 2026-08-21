@@ -102,3 +102,87 @@ func TestNewTableWriterRejectsExistingFile(t *testing.T) {
 	_, err = newTableWriter(path)
 	require.ErrorIs(t, err, os.ErrExist)
 }
+
+func writeTable(t *testing.T, path string, n int) {
+	t.Helper()
+	tw, err := newTableWriter(path)
+	require.NoError(t, err)
+	for i := range n {
+		require.NoError(t, tw.Add(
+			ik(t, fmt.Sprintf("key%04d", i), uint64(i+1), keys.KindPut),
+			bytes.Repeat([]byte{byte(i)}, 512)))
+	}
+	require.NoError(t, tw.Finish())
+}
+
+// parseTable is the hand-rolled reader; openTable must agree with it exactly.
+func TestOpenTableMatchesHandParse(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName(3))
+	writeTable(t, path, 40)
+
+	want, _, _ := parseTable(t, path)
+	require.GreaterOrEqual(t, len(want), 3, "input must span several blocks")
+
+	tbl, err := openTable(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, tbl.Close()) })
+
+	var got []indexEntry
+	for it := (&blockIter{b: tbl.index}); it.Valid(); it.Next() {
+		v := it.Value()
+		require.Len(t, v, 16)
+		got = append(got, indexEntry{
+			lastKey: bytes.Clone(it.Key()),
+			off:     binary.LittleEndian.Uint64(v[0:8]),
+			size:    binary.LittleEndian.Uint64(v[8:16]),
+		})
+	}
+	require.Equal(t, want, got)
+}
+
+func TestOpenTableRejectsCorruption(t *testing.T) {
+	footerAt := func(raw []byte) []byte { return raw[uint64(len(raw))-footerSize:] }
+
+	tests := []struct {
+		name   string
+		mangle func(raw []byte) []byte
+		want   error
+	}{
+		{"shorter than footer", func(raw []byte) []byte {
+			return raw[:footerSize-1]
+		}, ErrBlockCorrupt},
+		{"bad magic", func(raw []byte) []byte {
+			footerAt(raw)[23] ^= 0xff
+			return raw
+		}, ErrBadMagic},
+		{"indexSize overruns file", func(raw []byte) []byte {
+			binary.LittleEndian.PutUint64(footerAt(raw)[8:16], uint64(len(raw)))
+			return raw
+		}, ErrBlockCorrupt},
+		{"indexOff overruns file", func(raw []byte) []byte {
+			binary.LittleEndian.PutUint64(footerAt(raw)[0:8], uint64(len(raw)))
+			return raw
+		}, ErrBlockCorrupt},
+		{"index block bit flip", func(raw []byte) []byte {
+			indexOff := binary.LittleEndian.Uint64(footerAt(raw)[0:8])
+			raw[indexOff] ^= 0xff
+			return raw
+		}, ErrBlockChecksum},
+	}
+
+	golden := filepath.Join(t.TempDir(), FileName(1))
+	writeTable(t, golden, 40)
+	raw, err := os.ReadFile(golden)
+	require.NoError(t, err)
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			bad := filepath.Join(t.TempDir(), FileName(2))
+			require.NoError(t, os.WriteFile(bad, tc.mangle(bytes.Clone(raw)), 0o644))
+
+			tbl, err := openTable(bad)
+			require.ErrorIs(t, err, tc.want)
+			require.Nil(t, tbl)
+		})
+	}
+}

@@ -22,8 +22,8 @@ import (
 
 const (
 	footerSize uint64 = 24
-	// magic identifies a tinylsm SSTable.
-	magic uint64 = 0x0100004D534C7A4F
+	// tableMagic identifies a tinylsm SSTable.
+	tableMagic uint64 = 0x0100004D534C7A4F
 )
 
 var castagnoli = crc32.MakeTable(crc32.Castagnoli)
@@ -31,6 +31,7 @@ var castagnoli = crc32.MakeTable(crc32.Castagnoli)
 var (
 	ErrBlockChecksum = errors.New("sstable: block checksum mismatch")
 	ErrBlockCorrupt  = errors.New("sstable: corrupt block")
+	ErrBadMagic      = errors.New("sstable: bad magic")
 )
 
 const (
@@ -248,7 +249,7 @@ func (tw *tableWriter) Finish() error {
 	footer := make([]byte, footerSize)
 	binary.LittleEndian.PutUint64(footer[0:8], indexOff)
 	binary.LittleEndian.PutUint64(footer[8:16], indexSize)
-	binary.LittleEndian.PutUint64(footer[16:24], magic)
+	binary.LittleEndian.PutUint64(footer[16:24], tableMagic)
 	if _, err := tw.f.Write(footer); err != nil {
 		return err
 	}
@@ -276,6 +277,68 @@ func (tw *tableWriter) flushBlock() error {
 
 	tw.bb.Reset()
 	return nil
+}
+
+type Table struct {
+	f     *os.File
+	index *block
+}
+
+func openTable(path string) (_ *Table, err error) {
+	f, err := os.OpenFile(path, os.O_RDONLY, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	// every failure below abandons the *Table, so nothing else can close f
+	defer func() {
+		if err != nil {
+			_ = f.Close()
+		}
+	}()
+	fstat, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("stat file: %w", err)
+	}
+	fSize := fstat.Size()
+
+	if fSize < int64(footerSize) {
+		return nil, ErrBlockCorrupt
+	}
+	footer := make([]byte, footerSize)
+	_, err = f.ReadAt(footer, fSize-int64(footerSize))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read footer %w", err)
+	}
+
+	indexOff := binary.LittleEndian.Uint64(footer[0:8])
+	indexSize := binary.LittleEndian.Uint64(footer[8:16])
+	magic := binary.LittleEndian.Uint64(footer[16:24])
+	if magic != tableMagic {
+		return nil, ErrBadMagic
+	}
+
+	if indexOff+indexSize+footerSize > uint64(fSize) {
+		return nil, ErrBlockCorrupt
+	}
+
+	idxBuf := make([]byte, indexSize)
+	_, err = f.ReadAt(idxBuf, int64(indexOff))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read index %w", err)
+	}
+	idx, err := newBlock(idxBuf)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build new block for index %w", err)
+	}
+
+	return &Table{
+		index: idx,
+		f:     f,
+	}, nil
+}
+
+func (t *Table) Close() error {
+	return t.f.Close()
 }
 
 func FileName(num uint64) string {
