@@ -231,7 +231,7 @@ func TestTableGet(t *testing.T) {
 	tests := []struct {
 		name    string
 		userKey string
-		want    LookupStates
+		want    LookupState
 		wantVal []byte
 	}{
 		{"first key", "key0000", Found, recs[0].val},
@@ -273,7 +273,7 @@ func TestTableGetHonoursSnapshotSeq(t *testing.T) {
 
 	tests := []struct {
 		seq     uint64
-		want    LookupStates
+		want    LookupState
 		wantVal string
 	}{
 		{10, Found, "v9"},
@@ -369,4 +369,27 @@ func TestTableGetRejectsOutOfRangeBlockHandle(t *testing.T) {
 	_, st, err := tbl.Get(ik(t, "key0000", snapshot, keys.KindPut))
 	require.ErrorIs(t, err, ErrBlockCorrupt)
 	require.NotEqual(t, Found, st)
+}
+
+// A footer handle can point at a real, well-formed block that is simply the
+// wrong one — a data block instead of the index. The span guard passes and the
+// CRC passes, because those bytes ARE a valid block. Only the rule "the index
+// ends exactly where the footer begins" rejects it.
+func TestOpenTableRejectsIndexHandlePointingAtDataBlock(t *testing.T) {
+	golden := filepath.Join(t.TempDir(), FileName(8))
+	writeTable(t, golden, 40)
+
+	idx, raw, _ := parseTable(t, golden)
+	require.GreaterOrEqual(t, len(idx), 3, "input must span several blocks")
+
+	footer := raw[uint64(len(raw))-footerSize:]
+	binary.LittleEndian.PutUint64(footer[0:8], idx[0].off)
+	binary.LittleEndian.PutUint64(footer[8:16], idx[0].size)
+
+	bad := filepath.Join(t.TempDir(), FileName(9))
+	require.NoError(t, os.WriteFile(bad, raw, 0o644))
+
+	tbl, err := openTable(bad)
+	require.ErrorIs(t, err, ErrBlockCorrupt)
+	require.Nil(t, tbl)
 }

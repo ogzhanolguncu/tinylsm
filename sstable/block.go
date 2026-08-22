@@ -366,15 +366,15 @@ func openTable(path string) (_ *Table, err error) {
 	}, nil
 }
 
-type LookupStates uint8
+type LookupState uint8
 
 const (
-	Found LookupStates = iota
+	Found LookupState = iota
 	Deleted
 	NotFound
 )
 
-func (t *Table) Get(target []byte) ([]byte, LookupStates, error) {
+func (t *Table) Get(target []byte) ([]byte, LookupState, error) {
 	it := &blockIter{b: t.index, i: 0}
 	it.Seek(target)
 	if it.Valid() {
