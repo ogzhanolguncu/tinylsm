@@ -8,6 +8,7 @@
 package sstable
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -22,6 +23,8 @@ import (
 
 const (
 	footerSize uint64 = 24
+	// blockHandleSize is an off|size pair: two little-endian uint64s.
+	blockHandleSize = 16
 	// tableMagic identifies a tinylsm SSTable.
 	tableMagic uint64 = 0x0100004D534C7A4F
 )
@@ -281,7 +284,36 @@ func (tw *tableWriter) flushBlock() error {
 
 type Table struct {
 	f     *os.File
+	fsize uint64
 	index *block
+}
+
+// 16-byte off|size pair, LevelDB calls this a BlockHandle.
+func blockHandle(v []byte) (off, size uint64, err error) {
+	if len(v) != blockHandleSize {
+		return 0, 0, fmt.Errorf("block handle is %d bytes, want %d: %w", len(v), blockHandleSize, ErrBlockCorrupt)
+	}
+	off = binary.LittleEndian.Uint64(v[0:8])
+	size = binary.LittleEndian.Uint64(v[8:16])
+	return off, size, nil
+}
+
+// reads one block at off/size, bounds-checked against fileSize before allocating.
+func readBlock(f *os.File, off, size, fsize uint64) (*block, error) {
+	if off > fsize || size > fsize-off {
+		return nil, ErrBlockCorrupt
+	}
+
+	buf := make([]byte, size)
+	_, err := f.ReadAt(buf, int64(off))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read block: %w", err)
+	}
+	b, err := newBlock(buf)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build new block: %w", err)
+	}
+	return b, nil
 }
 
 func openTable(path string) (_ *Table, err error) {
@@ -289,7 +321,6 @@ func openTable(path string) (_ *Table, err error) {
 	if err != nil {
 		return nil, err
 	}
-	// every failure below abandons the *Table, so nothing else can close f
 	defer func() {
 		if err != nil {
 			_ = f.Close()
@@ -299,42 +330,94 @@ func openTable(path string) (_ *Table, err error) {
 	if err != nil {
 		return nil, fmt.Errorf("stat file: %w", err)
 	}
-	fSize := fstat.Size()
+	fsize := fstat.Size()
 
-	if fSize < int64(footerSize) {
+	if fsize < int64(footerSize) {
 		return nil, ErrBlockCorrupt
 	}
+
 	footer := make([]byte, footerSize)
-	_, err = f.ReadAt(footer, fSize-int64(footerSize))
+	_, err = f.ReadAt(footer, fsize-int64(footerSize))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read footer %w", err)
 	}
 
-	indexOff := binary.LittleEndian.Uint64(footer[0:8])
-	indexSize := binary.LittleEndian.Uint64(footer[8:16])
-	magic := binary.LittleEndian.Uint64(footer[16:24])
+	magic := binary.LittleEndian.Uint64(footer[blockHandleSize:footerSize])
 	if magic != tableMagic {
 		return nil, ErrBadMagic
 	}
-
-	if indexOff+indexSize+footerSize > uint64(fSize) {
+	off, size, err := blockHandle(footer[:blockHandleSize])
+	if err != nil {
+		return nil, err
+	}
+	// index block must end exactly where the footer begins
+	if size > uint64(fsize)-footerSize || off != uint64(fsize)-footerSize-size {
 		return nil, ErrBlockCorrupt
 	}
-
-	idxBuf := make([]byte, indexSize)
-	_, err = f.ReadAt(idxBuf, int64(indexOff))
+	idx, err := readBlock(f, off, size, uint64(fsize))
 	if err != nil {
-		return nil, fmt.Errorf("failed to read index %w", err)
-	}
-	idx, err := newBlock(idxBuf)
-	if err != nil {
-		return nil, fmt.Errorf("failed to build new block for index %w", err)
+		return nil, err
 	}
 
 	return &Table{
 		index: idx,
 		f:     f,
+		fsize: uint64(fsize),
 	}, nil
+}
+
+type LookupStates uint8
+
+const (
+	Found LookupStates = iota
+	Deleted
+	NotFound
+)
+
+func (t *Table) Get(target []byte) ([]byte, LookupStates, error) {
+	it := &blockIter{b: t.index, i: 0}
+	it.Seek(target)
+	if it.Valid() {
+		val := it.Value()
+		off, size, err := blockHandle(val)
+		if err != nil {
+			return nil, NotFound, err
+		}
+
+		blk, err := readBlock(t.f, off, size, t.fsize)
+		if err != nil {
+			return nil, NotFound, err
+		}
+		dit := &blockIter{b: blk}
+		dit.Seek(target)
+		if dit.Valid() {
+			ditUserKey, _, ditKind, err := keys.Decode(dit.Key())
+			if err != nil {
+				return nil, NotFound, err
+			}
+
+			targetUserKey, _, _, err := keys.Decode(target)
+			if err != nil {
+				return nil, NotFound, err
+			}
+
+			if !bytes.Equal(ditUserKey, targetUserKey) {
+				return nil, NotFound, nil
+			}
+
+			switch ditKind {
+			case keys.KindPut:
+				return dit.Value(), Found, nil
+			case keys.KindDelete:
+				return nil, Deleted, nil
+			default:
+				return nil, NotFound, fmt.Errorf("unknown kind %d in data block at %d: %w", ditKind, off, ErrBlockCorrupt)
+			}
+
+		}
+
+	}
+	return nil, NotFound, nil
 }
 
 func (t *Table) Close() error {
