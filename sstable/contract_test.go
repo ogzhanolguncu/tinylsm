@@ -6,6 +6,7 @@ package sstable
 
 import (
 	"fmt"
+	"path/filepath"
 	"testing"
 
 	"github.com/ogzhanolguncu/tinylsm/keys"
@@ -64,4 +65,36 @@ func TestBlockIterRejectsUseWhenExhausted(t *testing.T) {
 	require.Panics(t, func() { it.Key() })
 	require.Panics(t, func() { it.Value() })
 	require.Panics(t, func() { it.Next() })
+}
+
+func TestTableIterRejectsUseWhenExhausted(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName(11))
+	writeTable(t, path, 40)
+	tbl, err := openTable(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, tbl.Close()) })
+
+	t.Run("fresh, never positioned", func(t *testing.T) {
+		it := tbl.NewIterator()
+		require.False(t, it.Valid())
+		require.Panics(t, func() { it.Key() })
+		require.Panics(t, func() { it.Value() })
+		require.Panics(t, func() { it.Next() })
+	})
+
+	t.Run("walked off the end", func(t *testing.T) {
+		it := tbl.NewIterator()
+		for it.SeekToFirst(); it.Valid(); it.Next() {
+		}
+		require.Panics(t, func() { it.Key() })
+		require.Panics(t, func() { it.Value() })
+		require.Panics(t, func() { it.Next() })
+	})
+
+	t.Run("seeked past every key", func(t *testing.T) {
+		it := tbl.NewIterator()
+		it.Seek(ik(t, "zzz", 99, keys.KindPut))
+		require.False(t, it.Valid())
+		require.Panics(t, func() { it.Key() })
+	})
 }

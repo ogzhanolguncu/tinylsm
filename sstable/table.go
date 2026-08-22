@@ -263,6 +263,16 @@ func (t *Table) Get(target []byte) ([]byte, LookupState, error) {
 	return nil, NotFound, nil
 }
 
+func (t *Table) NewIterator() *tableIter {
+	return &tableIter{
+		indexIt: &blockIter{b: t.index, i: 0},
+		dataIt:  nil,
+		t:       t,
+		block:   nil,
+		err:     nil,
+	}
+}
+
 func (t *Table) Close() error {
 	return t.f.Close()
 }
