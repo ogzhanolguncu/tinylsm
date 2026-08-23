@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 
 	"github.com/ogzhanolguncu/tinylsm/keys"
+	"github.com/ogzhanolguncu/tinylsm/pkg/contract"
 )
 
 const (
@@ -119,6 +120,17 @@ func (tw *tableWriter) flushBlock() error {
 		size:    uint64(len(data)),
 	}
 	tw.idx = append(tw.idx, idxEntry)
+
+	if n := len(tw.idx); n == 1 {
+		contract.Ensure(idxEntry.off == 0, "tableWriter: first data block starts at %d, not 0", idxEntry.off)
+	} else {
+		prev := tw.idx[n-2]
+		contract.Ensure(idxEntry.off == prev.off+prev.size,
+			"tableWriter: block %d starts at %d, previous block ends at %d", n-1, idxEntry.off, prev.off+prev.size)
+		contract.Ensure(keys.Compare(idxEntry.lastKey, prev.lastKey) > 0,
+			"tableWriter: block %d last key %x does not sort after %x", n-1, idxEntry.lastKey, prev.lastKey)
+	}
+
 	tw.off += uint64(len(data))
 
 	tw.bb.Reset()

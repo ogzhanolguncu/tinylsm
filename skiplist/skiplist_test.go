@@ -189,7 +189,7 @@ func BenchmarkGet(b *testing.B) {
 }
 
 // BenchmarkGetMiss: every probe absent (17-byte probes can never equal
-// 16-byte inserted keys). Baseline for the bloom-filter phase.
+// 16-byte inserted keys). Baseline for the bloom filter.
 func BenchmarkGetMiss(b *testing.B) {
 	s, _ := benchList(1_000_000)
 	rng := rand.New(rand.NewSource(seed + 1))

@@ -98,3 +98,36 @@ func TestTableIterRejectsUseWhenExhausted(t *testing.T) {
 		require.Panics(t, func() { it.Key() })
 	})
 }
+
+// newBlock rejects a block that is only a trailer, so a builder must never
+// produce one. Without the postcondition tableWriter.Finish on an empty table
+// writes a 4-byte index block and the unreadable file is only discovered on
+// the next open.
+func TestBlockBuilderFinishRejectsEmptyBlock(t *testing.T) {
+	msg := panicMessage(t, func() { newBlockBuilder().Finish() })
+	require.Contains(t, msg, "postcondition violated")
+	require.Contains(t, msg, "newBlock rejects it")
+}
+
+func TestTableWriterFinishRejectsEmptyTable(t *testing.T) {
+	tw, err := newTableWriter(filepath.Join(t.TempDir(), FileName(1)))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tw.f.Close() })
+
+	require.Contains(t, panicMessage(t, func() { _ = tw.Finish() }), "postcondition violated")
+}
+
+func panicMessage(t *testing.T, fn func()) string {
+	t.Helper()
+
+	var msg string
+	func() {
+		defer func() {
+			r := recover()
+			require.NotNil(t, r, "expected a panic")
+			msg = fmt.Sprint(r)
+		}()
+		fn()
+	}()
+	return msg
+}

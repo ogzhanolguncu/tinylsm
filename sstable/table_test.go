@@ -206,7 +206,7 @@ func buildTable(t *testing.T, path string, recs []rec) {
 }
 
 // snapshot is the seq a reader asks with: newer than anything in the table, so
-// every version is visible. This is how the Phase 5 read path will call Get.
+// every version is visible. This is how the read path calls Get.
 const snapshot = 1000
 
 func TestTableGet(t *testing.T) {
@@ -258,7 +258,7 @@ func TestTableGet(t *testing.T) {
 }
 
 // One user key, three versions. Get must return the newest version at or below
-// the asked seq — the rule every snapshot read in later phases depends on.
+// the asked seq — the rule every snapshot read depends on.
 func TestTableGetHonoursSnapshotSeq(t *testing.T) {
 	path := filepath.Join(t.TempDir(), FileName(2))
 	buildTable(t, path, []rec{
@@ -295,8 +295,8 @@ func TestTableGetHonoursSnapshotSeq(t *testing.T) {
 	}
 }
 
-// A damaged table must report an error, never NotFound: Phase 5 would take
-// NotFound as "ask the next table" and answer from stale data.
+// A damaged table must report an error, never NotFound: the read path takes
+// NotFound as "ask the next table" and would answer from stale data.
 func TestTableGetRejectsCorruption(t *testing.T) {
 	t.Run("data block bit flip", func(t *testing.T) {
 		golden := filepath.Join(t.TempDir(), FileName(3))
@@ -318,12 +318,27 @@ func TestTableGetRejectsCorruption(t *testing.T) {
 	})
 
 	t.Run("unknown kind", func(t *testing.T) {
-		// keys.Encode still accepts kinds 2 and 3, so a flipped trailer byte
-		// reaches Get as a kind it cannot interpret.
-		path := filepath.Join(t.TempDir(), FileName(5))
-		buildTable(t, path, []rec{{"k", 1, keys.Kind(2), []byte("v")}})
+		// keys.Encode rejects undefined kinds, so this cannot be written through
+		// the writer: patch the kind byte on disk and repair the block checksum,
+		// which is what silent bit rot in a durable file looks like.
+		dir := t.TempDir()
+		golden := filepath.Join(dir, FileName(5))
+		buildTable(t, golden, []rec{{"k", 1, keys.KindPut, []byte("v")}})
 
-		tbl, err := openTable(path)
+		idx, raw, _ := parseTable(t, golden)
+		size := idx[0].size
+
+		// data block 0 is one entry: keyLen varint | internalKey | valLen | value.
+		// The kind is the low byte of the internal key's 8-byte trailer.
+		keyLen, n := binary.Uvarint(raw)
+		raw[uint64(n)+keyLen-keys.TrailerSize] = 2
+		binary.LittleEndian.PutUint32(raw[size-blockTrailerSize:size],
+			crc32.Checksum(raw[:size-blockTrailerSize], castagnoli))
+
+		bad := filepath.Join(dir, FileName(6))
+		require.NoError(t, os.WriteFile(bad, raw, 0o644))
+
+		tbl, err := openTable(bad)
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, tbl.Close()) })
 

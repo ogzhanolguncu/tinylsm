@@ -34,6 +34,14 @@ func TestIteratorMethodsRequireValid(t *testing.T) {
 			require.Contains(t, panicMessage(t, func() { call(it) }), want)
 		})
 
+		t.Run("never positioned/"+name, func(t *testing.T) {
+			s := newList()
+			s.Insert([]byte("k"), []byte("v"))
+			it := s.NewIterator()
+			require.False(t, it.Valid(), "a fresh iterator is unpositioned")
+			require.Contains(t, panicMessage(t, func() { call(it) }), want)
+		})
+
 		t.Run("walked off the end/"+name, func(t *testing.T) {
 			s := newList()
 			s.Insert([]byte("k"), []byte("v"))
@@ -67,4 +75,16 @@ func panicMessage(t *testing.T, fn func()) string {
 		fn()
 	}()
 	return msg
+}
+
+// A comparator that disagrees with the order the descent assumed leaves the
+// level-0 chain unsorted. Nothing downstream would notice: Get and Seek would
+// just start missing keys.
+func TestInsertPostconditionCatchesInconsistentComparator(t *testing.T) {
+	s := New(func(a, b []byte) int { return 1 }, seed)
+	s.Insert([]byte("a"), []byte("v"))
+
+	msg := panicMessage(t, func() { s.Insert([]byte("b"), []byte("v")) })
+	require.Contains(t, msg, "postcondition violated")
+	require.Contains(t, msg, "does not sort before its successor")
 }

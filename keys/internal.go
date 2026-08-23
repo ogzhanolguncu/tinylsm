@@ -1,8 +1,11 @@
 package keys
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
+
+	"github.com/ogzhanolguncu/tinylsm/pkg/contract"
 )
 
 const (
@@ -12,7 +15,7 @@ const (
 
 var (
 	ErrSeqOverflow  = errors.New("keys: seq overflows 56 bits")
-	ErrKindOverflow = errors.New("keys: kind overflows 8 bits")
+	ErrUnknownKind  = errors.New("keys: unknown kind")
 	ErrKeyTooShort  = errors.New("keys: internal key too short")
 	ErrEmptyUserKey = errors.New("keys: empty user key")
 )
@@ -44,12 +47,25 @@ func Encode(userKey []byte, seq uint64, kind Kind) ([]byte, error) {
 	if seq > MaxSeq {
 		return nil, ErrSeqOverflow
 	}
-	if uint64(kind) > 0x03 {
-		return nil, ErrKindOverflow
+
+	if kind != KindPut && kind != KindDelete {
+		return nil, ErrUnknownKind
 	}
 	buf := make([]byte, len(userKey)+TrailerSize)
 	copy(buf, userKey)
 	binary.LittleEndian.PutUint64(buf[len(userKey):], seq<<8|uint64(kind))
+
+	// The trailer is the whole ordering scheme: assert it reads back as what went
+	// in, so a shift or mask regression dies here instead of as a mis-sorted
+	// SSTable a thousand writes later. Encode runs on every write and Ensure
+	// boxes its arguments into []any whether or not it fires — a %x on the key
+	// plus %d on the trailer fields measured 5 allocs and 96 B per call — so the
+	// message stays literal. The values are on the stack at the panic.
+	if contract.Enabled {
+		gotKey, gotSeq, gotKind, decErr := Decode(buf)
+		ok := decErr == nil && bytes.Equal(gotKey, userKey) && gotSeq == seq && gotKind == kind
+		contract.Ensure(ok, "keys.Encode: trailer does not round-trip")
+	}
 	return buf, nil
 }
 

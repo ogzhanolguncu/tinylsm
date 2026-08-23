@@ -69,6 +69,9 @@ func (b *blockBuilder) Empty() bool {
 func (b *blockBuilder) Finish() []byte {
 	crc := crc32.Checksum(b.buf, castagnoli)
 	b.buf = binary.LittleEndian.AppendUint32(b.buf, crc)
+
+	contract.Ensure(len(b.buf) > blockTrailerSize,
+		"blockBuilder.Finish: %d bytes is a bare trailer, newBlock rejects it", len(b.buf))
 	return b.buf
 }
 
@@ -95,7 +98,7 @@ func newBlock(data []byte) (*block, error) {
 	block := &block{data: data}
 
 	off := 0
-	for off != len(data) {
+	for off < len(data) {
 		block.offsets = append(block.offsets, off)
 		keyLen, n := binary.Uvarint(data[off:])
 		if n <= 0 {
@@ -120,6 +123,8 @@ func newBlock(data []byte) (*block, error) {
 		}
 		off += int(valLen)
 	}
+
+	contract.Ensure(off == len(data), "newBlock: entries end at %d, block is %d bytes", off, len(data))
 
 	return block, nil
 }

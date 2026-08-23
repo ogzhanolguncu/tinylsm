@@ -14,8 +14,8 @@ import (
 )
 
 // isCorruption reports whether err is one of the three sentinels a reader is
-// allowed to fail with. Any other error is unclassifiable by a caller: Phase 5
-// must be able to tell "this file is broken" from "this key is absent".
+// allowed to fail with. Any other error is unclassifiable by a caller: the read
+// path must be able to tell "this file is broken" from "this key is absent".
 func isCorruption(err error) bool {
 	return errors.Is(err, ErrBlockChecksum) ||
 		errors.Is(err, ErrBlockCorrupt) ||
@@ -59,8 +59,8 @@ func readAll(path string, lookups []lookup, wantKeys [][]byte) []string {
 	defer func() { _ = tbl.Close() }()
 
 	// A read may fail, but it may not lie. "absent" is not an allowed answer
-	// for a key that was written: Phase 5 would move to an older table and
-	// serve stale data.
+	// for a key that was written: the read path would move to an older table
+	// and serve stale data.
 	for _, l := range lookups {
 		var val []byte
 		var state LookupState

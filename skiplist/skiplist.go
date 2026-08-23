@@ -94,6 +94,24 @@ func (s *SkipList) Insert(key, val []byte) {
 		update[i].fp[i].Store(node)              // Old node points to new node
 	}
 
+	// The Require above rules out an equal neighbour. This is its negative
+	// space: after splicing, level 0 must still be strictly ascending. A bad
+	// comparator or a bad splice is silent otherwise, and every binary search
+	// downstream inherits the disorder.
+	// Nil neighbours are branched on, not folded into the condition: message
+	// arguments are evaluated even when the condition holds, so next.key would
+	// deref a nil successor at the tail of the list.
+	if contract.Enabled {
+		if prev := update[0]; prev != s.head {
+			contract.Ensure(s.comparator(prev.key, node.key) < 0,
+				"skiplist.Insert: %x does not sort after its predecessor %x", node.key, prev.key)
+		}
+		if next := node.next(0); next != nil {
+			contract.Ensure(s.comparator(node.key, next.key) < 0,
+				"skiplist.Insert: %x does not sort before its successor %x", node.key, next.key)
+		}
+	}
+
 	if h > oldH {
 		s.height.Store(h)
 	}
@@ -122,10 +140,7 @@ type SkipListIterator struct {
 }
 
 func (s *SkipList) NewIterator() *SkipListIterator {
-	return &SkipListIterator{
-		list:   s,
-		cursor: s.head,
-	}
+	return &SkipListIterator{list: s}
 }
 
 func (it *SkipListIterator) SeekToFirst() { it.cursor = it.list.head.next(0) }

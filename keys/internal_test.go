@@ -95,3 +95,12 @@ func TestDecodeAliasesInput(t *testing.T) {
 	ik[0] = 'b' // mutate the source
 	require.Equal(t, "bat", string(uk), "userKey must alias ik, not copy it")
 }
+
+// The trailer has two bits of room for the kind, but only two kinds are
+// defined. A kind nothing can interpret must not reach disk.
+func TestEncodeRejectsUndefinedKinds(t *testing.T) {
+	for _, k := range []Kind{2, 3, 4, 255} {
+		_, err := Encode([]byte("a"), 1, k)
+		require.ErrorIsf(t, err, ErrUnknownKind, "kind %d", k)
+	}
+}

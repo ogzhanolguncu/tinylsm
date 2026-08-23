@@ -41,7 +41,7 @@ var replayFixture = []Entry{
 	{Key: []byte("cat"), Value: nil, Seq: 3, Kind: KindDelete},
 }
 
-// The done-when for Phase 2: chop the file at EVERY byte boundary. No cut is
+// Chop the file at EVERY byte boundary. No cut is
 // corruption — a shortened file is exactly what a crash mid-append leaves.
 // Replay must recover every record that fully fits, error on none, and
 // truncate the file back to the last complete record.
