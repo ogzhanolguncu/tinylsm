@@ -35,14 +35,14 @@ type indexEntry struct {
 	size    uint64
 }
 
-type tableWriter struct {
+type Writer struct {
 	idx []indexEntry
 	bb  *blockBuilder
 	f   *os.File
 	off uint64
 }
 
-func newTableWriter(path string) (*tableWriter, error) {
+func NewWriter(path string) (*Writer, error) {
 	d, err := os.Open(filepath.Dir(path))
 	if err != nil {
 		return nil, fmt.Errorf("open sst dir: %w", err)
@@ -59,12 +59,12 @@ func newTableWriter(path string) (*tableWriter, error) {
 		_ = f.Close()
 		return nil, fmt.Errorf("sync sst dir: %w", err)
 	}
-	return &tableWriter{
+	return &Writer{
 		f: f, bb: newBlockBuilder(),
 	}, nil
 }
 
-func (tw *tableWriter) Add(key, val []byte) error {
+func (tw *Writer) Add(key, val []byte) error {
 	tw.bb.Add(key, val)
 	if tw.bb.Full() {
 		return tw.flushBlock()
@@ -72,7 +72,7 @@ func (tw *tableWriter) Add(key, val []byte) error {
 	return nil
 }
 
-func (tw *tableWriter) Finish() error {
+func (tw *Writer) Finish() error {
 	err := tw.flushBlock()
 	if err != nil {
 		return err
@@ -106,7 +106,7 @@ func (tw *tableWriter) Finish() error {
 	return tw.f.Close()
 }
 
-func (tw *tableWriter) flushBlock() error {
+func (tw *Writer) flushBlock() error {
 	if tw.bb.Empty() {
 		return nil
 	}
@@ -171,7 +171,7 @@ func readBlock(f *os.File, off, size, fsize uint64) (*block, error) {
 	return b, nil
 }
 
-func openTable(path string) (_ *Table, err error) {
+func Open(path string) (_ *Table, err error) {
 	f, err := os.OpenFile(path, os.O_RDONLY, 0o644)
 	if err != nil {
 		return nil, err
@@ -275,8 +275,8 @@ func (t *Table) Get(target []byte) ([]byte, LookupState, error) {
 	return nil, NotFound, nil
 }
 
-func (t *Table) NewIterator() *tableIter {
-	return &tableIter{
+func (t *Table) NewIterator() *Iter {
+	return &Iter{
 		indexIt: &blockIter{b: t.index, i: 0},
 		dataIt:  nil,
 		t:       t,

@@ -4,7 +4,7 @@ import (
 	"github.com/ogzhanolguncu/tinylsm/pkg/contract"
 )
 
-type tableIter struct {
+type Iter struct {
 	t       *Table
 	indexIt *blockIter
 	block   *block
@@ -12,7 +12,7 @@ type tableIter struct {
 	err     error
 }
 
-func (it *tableIter) SeekToFirst() {
+func (it *Iter) SeekToFirst() {
 	it.indexIt.i = 0
 	if !it.indexIt.Valid() {
 		return
@@ -23,7 +23,7 @@ func (it *tableIter) SeekToFirst() {
 	}
 }
 
-func (it *tableIter) Seek(target []byte) {
+func (it *Iter) Seek(target []byte) {
 	it.indexIt.Seek(target)
 	if !it.indexIt.Valid() {
 		return
@@ -38,7 +38,7 @@ func (it *tableIter) Seek(target []byte) {
 	it.dataIt.Seek(target)
 }
 
-func (it *tableIter) Next() {
+func (it *Iter) Next() {
 	contract.Require(it.Valid(), "tableIter.Next: iterator is exhausted")
 	it.dataIt.Next()
 	if it.dataIt.Valid() {
@@ -57,25 +57,25 @@ func (it *tableIter) Next() {
 	}
 }
 
-func (it *tableIter) Valid() bool {
+func (it *Iter) Valid() bool {
 	return it.err == nil && it.dataIt != nil && it.dataIt.Valid()
 }
 
-func (it *tableIter) Key() []byte {
+func (it *Iter) Key() []byte {
 	contract.Require(it.Valid(), "tableIter.Key: iterator is exhausted")
 	return it.dataIt.Key()
 }
 
-func (it *tableIter) Value() []byte {
+func (it *Iter) Value() []byte {
 	contract.Require(it.Valid(), "tableIter.Value: iterator is exhausted")
 	return it.dataIt.Value()
 }
 
-func (it *tableIter) Error() error {
+func (it *Iter) Error() error {
 	return it.err
 }
 
-func (it *tableIter) loadBlock() error {
+func (it *Iter) loadBlock() error {
 	contract.Require(it.indexIt.Valid(), "tableIter.loadBlock: indexIt is not positioned")
 	val := it.indexIt.Value()
 	off, size, err := blockHandle(val)

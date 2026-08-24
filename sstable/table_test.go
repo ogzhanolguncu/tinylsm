@@ -58,7 +58,7 @@ func TestTableWriterRoundTrip(t *testing.T) {
 			}
 
 			path := filepath.Join(t.TempDir(), FileName(7))
-			tw, err := newTableWriter(path)
+			tw, err := NewWriter(path)
 			require.NoError(t, err)
 			for _, e := range entries {
 				require.NoError(t, tw.Add(e.key, e.val))
@@ -96,22 +96,23 @@ func TestTableWriterRoundTrip(t *testing.T) {
 // A reused file number must never silently destroy a live SSTable.
 func TestNewTableWriterRejectsExistingFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), FileName(1))
-	tw, err := newTableWriter(path)
+	tw, err := NewWriter(path)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = tw.f.Close() })
 
-	_, err = newTableWriter(path)
+	_, err = NewWriter(path)
 	require.ErrorIs(t, err, os.ErrExist)
 }
 
 func writeTable(t *testing.T, path string, n int) {
 	t.Helper()
-	tw, err := newTableWriter(path)
+	tw, err := NewWriter(path)
 	require.NoError(t, err)
 	for i := range n {
 		require.NoError(t, tw.Add(
 			ik(t, fmt.Sprintf("key%04d", i), uint64(i+1), keys.KindPut),
-			bytes.Repeat([]byte{byte(i)}, 512)))
+			bytes.Repeat([]byte{byte(i)}, 512),
+		))
 	}
 	require.NoError(t, tw.Finish())
 }
@@ -124,7 +125,7 @@ func TestOpenTableMatchesHandParse(t *testing.T) {
 	want, _, _ := parseTable(t, path)
 	require.GreaterOrEqual(t, len(want), 3, "input must span several blocks")
 
-	tbl, err := openTable(path)
+	tbl, err := Open(path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, tbl.Close()) })
 
@@ -181,7 +182,7 @@ func TestOpenTableRejectsCorruption(t *testing.T) {
 			bad := filepath.Join(t.TempDir(), FileName(2))
 			require.NoError(t, os.WriteFile(bad, tc.mangle(bytes.Clone(raw)), 0o644))
 
-			tbl, err := openTable(bad)
+			tbl, err := Open(bad)
 			require.ErrorIs(t, err, tc.want)
 			require.Nil(t, tbl)
 		})
@@ -197,7 +198,7 @@ type rec struct {
 
 func buildTable(t *testing.T, path string, recs []rec) {
 	t.Helper()
-	tw, err := newTableWriter(path)
+	tw, err := NewWriter(path)
 	require.NoError(t, err)
 	for _, r := range recs {
 		require.NoError(t, tw.Add(ik(t, r.userKey, r.seq, r.kind), r.val))
@@ -224,7 +225,7 @@ func TestTableGet(t *testing.T) {
 	idx, _, _ := parseTable(t, path)
 	require.GreaterOrEqual(t, len(idx), 3, "input must span several blocks")
 
-	tbl, err := openTable(path)
+	tbl, err := Open(path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, tbl.Close()) })
 
@@ -267,7 +268,7 @@ func TestTableGetHonoursSnapshotSeq(t *testing.T) {
 		{"k", 1, keys.KindPut, []byte("v1")},
 	})
 
-	tbl, err := openTable(path)
+	tbl, err := Open(path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, tbl.Close()) })
 
@@ -308,7 +309,7 @@ func TestTableGetRejectsCorruption(t *testing.T) {
 		bad := filepath.Join(t.TempDir(), FileName(4))
 		require.NoError(t, os.WriteFile(bad, raw, 0o644))
 
-		tbl, err := openTable(bad)
+		tbl, err := Open(bad)
 		require.NoError(t, err, "only the data block is damaged")
 		t.Cleanup(func() { require.NoError(t, tbl.Close()) })
 
@@ -338,7 +339,7 @@ func TestTableGetRejectsCorruption(t *testing.T) {
 		bad := filepath.Join(dir, FileName(6))
 		require.NoError(t, os.WriteFile(bad, raw, 0o644))
 
-		tbl, err := openTable(bad)
+		tbl, err := Open(bad)
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, tbl.Close()) })
 
@@ -377,7 +378,7 @@ func TestTableGetRejectsOutOfRangeBlockHandle(t *testing.T) {
 	bad := filepath.Join(t.TempDir(), FileName(7))
 	require.NoError(t, os.WriteFile(bad, raw, 0o644))
 
-	tbl, err := openTable(bad)
+	tbl, err := Open(bad)
 	require.NoError(t, err, "the index block itself is still well-formed")
 	t.Cleanup(func() { require.NoError(t, tbl.Close()) })
 
@@ -404,7 +405,7 @@ func TestOpenTableRejectsIndexHandlePointingAtDataBlock(t *testing.T) {
 	bad := filepath.Join(t.TempDir(), FileName(9))
 	require.NoError(t, os.WriteFile(bad, raw, 0o644))
 
-	tbl, err := openTable(bad)
+	tbl, err := Open(bad)
 	require.ErrorIs(t, err, ErrBlockCorrupt)
 	require.Nil(t, tbl)
 }

@@ -70,7 +70,7 @@ func TestBlockIterRejectsUseWhenExhausted(t *testing.T) {
 func TestTableIterRejectsUseWhenExhausted(t *testing.T) {
 	path := filepath.Join(t.TempDir(), FileName(11))
 	writeTable(t, path, 40)
-	tbl, err := openTable(path)
+	tbl, err := Open(path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, tbl.Close()) })
 
@@ -110,7 +110,7 @@ func TestBlockBuilderFinishRejectsEmptyBlock(t *testing.T) {
 }
 
 func TestTableWriterFinishRejectsEmptyTable(t *testing.T) {
-	tw, err := newTableWriter(filepath.Join(t.TempDir(), FileName(1)))
+	tw, err := NewWriter(filepath.Join(t.TempDir(), FileName(1)))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = tw.f.Close() })
 

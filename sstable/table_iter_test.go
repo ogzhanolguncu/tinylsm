@@ -13,7 +13,7 @@ import (
 
 // scan drains an iterator from its current position and returns the keys it
 // yielded. It never calls SeekToFirst, so callers choose the starting point.
-func scan(t *testing.T, it *tableIter) [][]byte {
+func scan(t *testing.T, it *Iter) [][]byte {
 	t.Helper()
 	var got [][]byte
 	for ; it.Valid(); it.Next() {
@@ -30,7 +30,7 @@ func TestTableIterScansEveryEntryInOrder(t *testing.T) {
 	idx, _, _ := parseTable(t, path)
 	require.GreaterOrEqual(t, len(idx), 3, "input must span several blocks")
 
-	tbl, err := openTable(path)
+	tbl, err := Open(path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, tbl.Close()) })
 
@@ -51,7 +51,7 @@ func TestTableIterSeek(t *testing.T) {
 	path := filepath.Join(t.TempDir(), FileName(2))
 	writeTable(t, path, n)
 
-	tbl, err := openTable(path)
+	tbl, err := Open(path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, tbl.Close()) })
 
@@ -96,7 +96,7 @@ func TestTableIterSeekToFirstAfterSeek(t *testing.T) {
 	path := filepath.Join(t.TempDir(), FileName(3))
 	writeTable(t, path, n)
 
-	tbl, err := openTable(path)
+	tbl, err := Open(path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, tbl.Close()) })
 
@@ -122,7 +122,7 @@ func TestTableIterReportsCorruptionInsteadOfEndOfScan(t *testing.T) {
 	bad := filepath.Join(t.TempDir(), FileName(5))
 	require.NoError(t, os.WriteFile(bad, raw, 0o644))
 
-	tbl, err := openTable(bad)
+	tbl, err := Open(bad)
 	require.NoError(t, err, "index and footer are intact")
 	t.Cleanup(func() { require.NoError(t, tbl.Close()) })
 
@@ -155,7 +155,7 @@ func TestTableIterErrorIsSticky(t *testing.T) {
 	bad := filepath.Join(t.TempDir(), FileName(7))
 	require.NoError(t, os.WriteFile(bad, raw, 0o644))
 
-	tbl, err := openTable(bad)
+	tbl, err := Open(bad)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, tbl.Close()) })
 

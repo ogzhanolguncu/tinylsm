@@ -50,7 +50,7 @@ func readAll(path string, lookups []lookup, wantKeys [][]byte) []string {
 	var out []string
 
 	var tbl *Table
-	if err := probe(func() (err error) { tbl, err = openTable(path); return }); err != nil {
+	if err := probe(func() (err error) { tbl, err = Open(path); return }); err != nil {
 		if !isCorruption(err) {
 			out = append(out, "openTable: "+err.Error())
 		}
@@ -253,7 +253,7 @@ func TestIndexEntryWithMalformedHandleIsRejectedOnUse(t *testing.T) {
 			path := filepath.Join(dir, FileName(2))
 			require.NoError(t, os.WriteFile(path, bad, 0o644))
 
-			tbl, err := openTable(path)
+			tbl, err := Open(path)
 			require.NoError(t, err, "the index block itself is well formed")
 			t.Cleanup(func() { require.NoError(t, tbl.Close()) })
 
