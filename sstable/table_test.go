@@ -232,16 +232,16 @@ func TestTableGet(t *testing.T) {
 	tests := []struct {
 		name    string
 		userKey string
-		want    LookupState
+		want    keys.LookupState
 		wantVal []byte
 	}{
-		{"first key", "key0000", Found, recs[0].val},
-		{"key in a later block", "key0025", Found, recs[25].val},
-		{"last key", "key0039", Found, recs[39].val},
-		{"tombstone", "key0017", Deleted, nil},
-		{"absent, before every key", "aaa", NotFound, nil},
-		{"absent, past every key", "zzz", NotFound, nil},
-		{"absent, sorts inside a middle block", "key0025x", NotFound, nil},
+		{"first key", "key0000", keys.Found, recs[0].val},
+		{"key in a later block", "key0025", keys.Found, recs[25].val},
+		{"last key", "key0039", keys.Found, recs[39].val},
+		{"tombstone", "key0017", keys.Deleted, nil},
+		{"absent, before every key", "aaa", keys.NotFound, nil},
+		{"absent, past every key", "zzz", keys.NotFound, nil},
+		{"absent, sorts inside a middle block", "key0025x", keys.NotFound, nil},
 	}
 
 	for _, tc := range tests {
@@ -274,14 +274,14 @@ func TestTableGetHonoursSnapshotSeq(t *testing.T) {
 
 	tests := []struct {
 		seq     uint64
-		want    LookupState
+		want    keys.LookupState
 		wantVal string
 	}{
-		{10, Found, "v9"},
-		{9, Found, "v9"},
-		{7, Found, "v5"},
-		{2, Found, "v1"},
-		{0, NotFound, ""},
+		{10, keys.Found, "v9"},
+		{9, keys.Found, "v9"},
+		{7, keys.Found, "v5"},
+		{2, keys.Found, "v1"},
+		{0, keys.NotFound, ""},
 	}
 
 	for _, tc := range tests {
@@ -289,7 +289,7 @@ func TestTableGetHonoursSnapshotSeq(t *testing.T) {
 			val, st, err := tbl.Get(ik(t, "k", tc.seq, keys.KindPut))
 			require.NoError(t, err)
 			require.Equal(t, tc.want, st)
-			if tc.want == Found {
+			if tc.want == keys.Found {
 				require.Equal(t, []byte(tc.wantVal), val)
 			}
 		})
@@ -315,7 +315,7 @@ func TestTableGetRejectsCorruption(t *testing.T) {
 
 		_, st, err := tbl.Get(ik(t, "key0000", snapshot, keys.KindPut))
 		require.ErrorIs(t, err, ErrBlockChecksum)
-		require.NotEqual(t, Found, st)
+		require.NotEqual(t, keys.Found, st)
 	})
 
 	t.Run("unknown kind", func(t *testing.T) {
@@ -345,7 +345,7 @@ func TestTableGetRejectsCorruption(t *testing.T) {
 
 		_, st, err := tbl.Get(ik(t, "k", snapshot, keys.KindPut))
 		require.ErrorIs(t, err, ErrBlockCorrupt)
-		require.NotEqual(t, Found, st)
+		require.NotEqual(t, keys.Found, st)
 	})
 }
 
@@ -384,7 +384,7 @@ func TestTableGetRejectsOutOfRangeBlockHandle(t *testing.T) {
 
 	_, st, err := tbl.Get(ik(t, "key0000", snapshot, keys.KindPut))
 	require.ErrorIs(t, err, ErrBlockCorrupt)
-	require.NotEqual(t, Found, st)
+	require.NotEqual(t, keys.Found, st)
 }
 
 // A footer handle can point at a real, well-formed block that is simply the

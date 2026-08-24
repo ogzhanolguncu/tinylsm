@@ -20,6 +20,14 @@ var (
 	ErrEmptyUserKey = errors.New("keys: empty user key")
 )
 
+type LookupState uint8
+
+const (
+	Found LookupState = iota
+	Deleted
+	NotFound
+)
+
 // Kind occupies the low byte of the trailer, so it must fit in 8 bits.
 type Kind uint8
 

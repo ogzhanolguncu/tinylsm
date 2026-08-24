@@ -211,20 +211,20 @@ func TestGet(t *testing.T) {
 		name      string
 		key       string
 		wantVal   string
-		wantFound bool
+		wantState keys.LookupState
 	}{
-		{"newest version wins", "cat", "meow", true},
-		{"tombstone reads as absent", "dog", "", false},
-		{"empty value is not a tombstone", "empty", "", true},
-		{"user key longer than a trailer", "elephantine", "big", true},
-		{"absent key sorting before every entry", "bee", "", false},
-		{"absent key that a stored key prefixes", "cats", "", false},
-		{"absent key past the last entry", "zebra", "", false},
+		{"newest version wins", "cat", "meow", keys.Found},
+		{"tombstone reads as deleted", "dog", "", keys.Deleted},
+		{"empty value is not a tombstone", "empty", "", keys.Found},
+		{"user key longer than a trailer", "elephantine", "big", keys.Found},
+		{"absent key sorting before every entry", "bee", "", keys.NotFound},
+		{"absent key that a stored key prefixes", "cats", "", keys.NotFound},
+		{"absent key past the last entry", "zebra", "", keys.NotFound},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			val, found := mt.Get([]byte(tc.key))
-			require.Equal(t, tc.wantFound, found)
+			val, state := mt.Get([]byte(tc.key))
+			require.Equal(t, tc.wantState, state)
 			require.Equal(t, tc.wantVal, string(val))
 		})
 	}
@@ -236,8 +236,8 @@ func TestGetOnEmptyMemtable(t *testing.T) {
 	mt, _ := newMemtable(t)
 	defer mt.Close()
 
-	val, found := mt.Get([]byte("cat"))
-	require.False(t, found)
+	val, state := mt.Get([]byte("cat"))
+	require.Equal(t, keys.NotFound, state)
 	require.Nil(t, val)
 }
 
@@ -261,8 +261,8 @@ func TestGetIsSafeDuringConcurrentPuts(t *testing.T) {
 	for range readers {
 		wg.Go(func() {
 			for range 100 {
-				val, found := mt.Get([]byte("cat"))
-				require.True(t, found, "cat is written before the readers start and never deleted")
+				val, state := mt.Get([]byte("cat"))
+				require.Equal(t, keys.Found, state, "cat is written before the readers start and never deleted")
 				require.NotEmpty(t, val)
 			}
 		})
@@ -270,14 +270,19 @@ func TestGetIsSafeDuringConcurrentPuts(t *testing.T) {
 	wg.Wait()
 }
 
+// Close shuts the WAL writer, not the skiplist. A frozen memtable is still
+// being read while its flush writes it out, so Get must keep answering from
+// memory long after the last write is refused.
 func TestGetOnClosedMemtable(t *testing.T) {
 	mt, _ := newMemtable(t)
 	require.NoError(t, mt.Put([]byte("cat"), []byte("purr")))
 	require.NoError(t, mt.Close())
 
-	val, found := mt.Get([]byte("cat"))
-	require.False(t, found, "a closed memtable answers nothing, even for data still in memory")
-	require.Nil(t, val)
+	val, state := mt.Get([]byte("cat"))
+	require.Equal(t, keys.Found, state, "closing stops writes, it does not hide data still in memory")
+	require.Equal(t, "purr", string(val))
+
+	require.ErrorIs(t, mt.Put([]byte("cat"), []byte("meow")), ErrClosed)
 }
 
 // A crash is just "Close never ran". Everything Put returned success for is
@@ -303,29 +308,29 @@ func TestReplayFromCrash(t *testing.T) {
 	defer mt2.Close()
 
 	// an overwritten key replays to its LAST value, not its first
-	val, found := mt2.Get([]byte("cat"))
-	require.True(t, found)
+	val, state := mt2.Get([]byte("cat"))
+	require.Equal(t, keys.Found, state)
 	require.Equal(t, "meow", string(val))
 
 	// a key written once and never touched again
-	val, found = mt2.Get([]byte("elephantine"))
-	require.True(t, found)
+	val, state = mt2.Get([]byte("elephantine"))
+	require.Equal(t, keys.Found, state)
 	require.Equal(t, "big", string(val))
 
 	// empty value is a value: found, and distinct from a miss
-	val, found = mt2.Get([]byte("empty"))
-	require.True(t, found, "an empty value is stored data, not an absent key")
+	val, state = mt2.Get([]byte("empty"))
+	require.Equal(t, keys.Found, state, "an empty value is stored data, not an absent key")
 	require.Empty(t, val)
 
 	// the tombstone survived the crash: dog stays deleted even though its
 	// Put is still sitting in the WAL ahead of the Delete
-	val, found = mt2.Get([]byte("dog"))
-	require.False(t, found, "a Delete replayed after its Put must still win")
+	val, state = mt2.Get([]byte("dog"))
+	require.Equal(t, keys.Deleted, state, "a Delete replayed after its Put must still win")
 	require.Nil(t, val)
 
 	// a key that was never written stays missing
-	val, found = mt2.Get([]byte("ghost"))
-	require.False(t, found)
+	val, state = mt2.Get([]byte("ghost"))
+	require.Equal(t, keys.NotFound, state)
 	require.Nil(t, val)
 
 	// seqs resume past the highest on disk (6 writes => seqs 0..5)
@@ -333,8 +338,8 @@ func TestReplayFromCrash(t *testing.T) {
 
 	// and a post-crash write shadows the replayed one
 	require.NoError(t, mt2.Put([]byte("cat"), []byte("kebap")))
-	val, found = mt2.Get([]byte("cat"))
-	require.True(t, found)
+	val, state = mt2.Get([]byte("cat"))
+	require.Equal(t, keys.Found, state)
 	require.Equal(t, "kebap", string(val))
 	require.Equal(t, uint64(7), mt2.nextSeq)
 
@@ -376,8 +381,8 @@ func TestReplayFromEmptyWAL(t *testing.T) {
 	require.Equal(t, uint64(0), mt2.nextSeq, "an empty WAL must resume exactly where New starts")
 	require.Equal(t, uint64(0), mt2.ApproxSize())
 
-	_, found := mt2.Get([]byte("cat"))
-	require.False(t, found)
+	_, state := mt2.Get([]byte("cat"))
+	require.Equal(t, keys.NotFound, state)
 
 	// the reopened memtable is writable, and its first seq is still 0
 	require.NoError(t, mt2.Put([]byte("cat"), []byte("purr")))
@@ -401,11 +406,11 @@ func TestReplayAcrossTwoReopens(t *testing.T) {
 	mt3 := openMemtable(t, path)
 	defer mt3.Close()
 
-	_, found := mt3.Get([]byte("cat"))
-	require.False(t, found, "a tombstone written in session 2 must outlive session 2")
+	_, state := mt3.Get([]byte("cat"))
+	require.Equal(t, keys.Deleted, state, "a tombstone written in session 2 must outlive session 2")
 
-	val, found := mt3.Get([]byte("dog"))
-	require.True(t, found)
+	val, state := mt3.Get([]byte("dog"))
+	require.Equal(t, keys.Found, state)
 	require.Equal(t, "woof", string(val))
 
 	require.Equal(t, uint64(3), mt3.nextSeq, "seqs run across sessions, they do not restart")
@@ -431,16 +436,17 @@ func TestRandomOpsMatchAMapOracleAcrossReopens(t *testing.T) {
 	key := func(i int) []byte { return fmt.Appendf(nil, "key%02d", i) }
 
 	// present-in-the-map == live key; absent == never written or tombstoned.
-	// A tombstone is not a distinct oracle state, because Get cannot see one.
+	// Get now distinguishes Deleted from NotFound, so this oracle no longer
+	// checks everything it could: tracking tombstones as a third state would.
 	oracle := make(map[string]string)
 
 	checkAll := func(mt *Memtable, when string) {
 		t.Helper()
 		for i := range keyspace {
 			k := key(i)
-			val, found := mt.Get(k)
+			val, state := mt.Get(k)
 			want, live := oracle[string(k)]
-			require.Equal(t, live, found, "%s: %q liveness", when, k)
+			require.Equal(t, live, state == keys.Found, "%s: %q liveness", when, k)
 			if live {
 				require.Equal(t, want, string(val), "%s: %q value", when, k)
 			}
@@ -466,9 +472,9 @@ func TestRandomOpsMatchAMapOracleAcrossReopens(t *testing.T) {
 			require.NoError(t, mt.Delete(k))
 			delete(oracle, string(k))
 		default:
-			val, found := mt.Get(k)
+			val, state := mt.Get(k)
 			want, live := oracle[string(k)]
-			require.Equal(t, live, found, "op %d: %q liveness", i, k)
+			require.Equal(t, live, state == keys.Found, "op %d: %q liveness", i, k)
 			if live {
 				require.Equal(t, want, string(val), "op %d: %q value", i, k)
 			}

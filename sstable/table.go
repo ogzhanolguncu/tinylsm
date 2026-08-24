@@ -221,58 +221,50 @@ func Open(path string) (_ *Table, err error) {
 	}, nil
 }
 
-type LookupState uint8
-
-const (
-	Found LookupState = iota
-	Deleted
-	NotFound
-)
-
-func (t *Table) Get(target []byte) ([]byte, LookupState, error) {
+func (t *Table) Get(target []byte) ([]byte, keys.LookupState, error) {
 	it := &blockIter{b: t.index, i: 0}
 	it.Seek(target)
 	if it.Valid() {
 		val := it.Value()
 		off, size, err := blockHandle(val)
 		if err != nil {
-			return nil, NotFound, err
+			return nil, keys.NotFound, err
 		}
 
 		blk, err := readBlock(t.f, off, size, t.fsize)
 		if err != nil {
-			return nil, NotFound, err
+			return nil, keys.NotFound, err
 		}
 		dit := &blockIter{b: blk}
 		dit.Seek(target)
 		if dit.Valid() {
 			ditUserKey, _, ditKind, err := keys.Decode(dit.Key())
 			if err != nil {
-				return nil, NotFound, err
+				return nil, keys.NotFound, err
 			}
 
 			targetUserKey, _, _, err := keys.Decode(target)
 			if err != nil {
-				return nil, NotFound, err
+				return nil, keys.NotFound, err
 			}
 
 			if !bytes.Equal(ditUserKey, targetUserKey) {
-				return nil, NotFound, nil
+				return nil, keys.NotFound, nil
 			}
 
 			switch ditKind {
 			case keys.KindPut:
-				return dit.Value(), Found, nil
+				return dit.Value(), keys.Found, nil
 			case keys.KindDelete:
-				return nil, Deleted, nil
+				return nil, keys.Deleted, nil
 			default:
-				return nil, NotFound, fmt.Errorf("unknown kind %d in data block at %d: %w", ditKind, off, ErrBlockCorrupt)
+				return nil, keys.NotFound, fmt.Errorf("unknown kind %d in data block at %d: %w", ditKind, off, ErrBlockCorrupt)
 			}
 
 		}
 
 	}
-	return nil, NotFound, nil
+	return nil, keys.NotFound, nil
 }
 
 func (t *Table) NewIterator() *Iter {

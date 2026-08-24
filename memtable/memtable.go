@@ -92,21 +92,16 @@ func (mt *Memtable) Delete(key []byte) error {
 	return mt.mutate(key, nil, wal.KindDelete)
 }
 
-func (mt *Memtable) Get(key []byte) ([]byte, bool) {
-	if mt.closed.Load() {
-		// its closed
-		return nil, false
-	}
-
+func (mt *Memtable) Get(key []byte) ([]byte, keys.LookupState) {
 	ik, err := keys.Encode(key, keys.MaxSeq, keys.KindPut)
 	if err != nil {
-		return nil, false
+		return nil, keys.NotFound
 	}
 
 	it := mt.skiplist.NewIterator()
 	it.Seek(ik)
 	if !it.Valid() {
-		return nil, false
+		return nil, keys.NotFound
 	}
 
 	encodedKey := it.Key()
@@ -119,12 +114,12 @@ func (mt *Memtable) Get(key []byte) ([]byte, bool) {
 	// Overshoot before kind: the kind of an entry belonging to another user key
 	// says nothing about this one.
 	if !bytes.Equal(userKey, key) {
-		return nil, false
+		return nil, keys.NotFound
 	}
 	if kind == keys.KindDelete {
-		return nil, false
+		return nil, keys.Deleted
 	}
-	return skVal, true
+	return skVal, keys.Found
 }
 
 func (mt *Memtable) mutate(key, val []byte, kind wal.Kind) error {

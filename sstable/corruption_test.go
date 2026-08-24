@@ -37,7 +37,7 @@ func probe(fn func() error) (err error) {
 type lookup struct {
 	userKey string
 	target  []byte
-	state   LookupState
+	state   keys.LookupState
 	val     []byte
 }
 
@@ -63,13 +63,13 @@ func readAll(path string, lookups []lookup, wantKeys [][]byte) []string {
 	// and serve stale data.
 	for _, l := range lookups {
 		var val []byte
-		var state LookupState
+		var state keys.LookupState
 		err := probe(func() (err error) { val, state, err = tbl.Get(l.target); return })
 		switch {
 		case err != nil && !isCorruption(err):
 			out = append(out, fmt.Sprintf("Get(%s): %v", l.userKey, err))
 		case err != nil:
-		case state != l.state || (state == Found && !bytes.Equal(val, l.val)):
+		case state != l.state || (state == keys.Found && !bytes.Equal(val, l.val)):
 			out = append(out, fmt.Sprintf("Get(%s): answered state %d value %x, want state %d value %x",
 				l.userKey, state, prefix(val), l.state, prefix(l.val)))
 		}
@@ -159,9 +159,9 @@ func TestTableSurvivesEveryByteFlip(t *testing.T) {
 	lookups := make([]lookup, len(recs))
 	wantKeys := make([][]byte, len(recs))
 	for i, r := range recs {
-		state := Found
+		state := keys.Found
 		if r.kind == keys.KindDelete {
-			state = Deleted
+			state = keys.Deleted
 		}
 		lookups[i] = lookup{
 			userKey: r.userKey,
@@ -260,7 +260,7 @@ func TestIndexEntryWithMalformedHandleIsRejectedOnUse(t *testing.T) {
 			// key0010 sits in the damaged block: idx[0] ends at key0007, idx[1] at key0015.
 			_, state, err := tbl.Get(ik(t, "key0010", snapshot, keys.KindPut))
 			require.ErrorIs(t, err, ErrBlockCorrupt)
-			require.Equal(t, NotFound, state)
+			require.Equal(t, keys.NotFound, state)
 
 			it := tbl.NewIterator()
 			it.SeekToFirst()
