@@ -28,6 +28,10 @@ func NewWriter(path string) (*Writer, error) {
 	}, nil
 }
 
+func FileName(num uint64) string {
+	return fmt.Sprintf("%09d.wal", num)
+}
+
 func OpenWriter(path string) (*Writer, error) {
 	dir := filepath.Dir(path)
 	name := filepath.Base(path)
@@ -157,6 +161,10 @@ func truncateAndFsync(path string, off int) error {
 		return fmt.Errorf("fsync after truncate: %w", err)
 	}
 	return nil
+}
+
+func (w *Writer) Path() string {
+	return w.path
 }
 
 func (w *Writer) Close() error {

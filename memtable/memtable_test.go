@@ -61,10 +61,10 @@ func TestPutTracksApproximateSize(t *testing.T) {
 
 	require.NoError(t, mt.Put([]byte("cat"), []byte("purr")))
 	// internal key is userKey + an 8-byte trailer, plus the raw value
-	require.Equal(t, uint64(len("cat")+8+len("purr")), mt.approxSize)
+	require.Equal(t, uint64(len("cat")+8+len("purr")), mt.ApproxSize())
 
 	require.NoError(t, mt.Put([]byte("cat"), []byte("meow")))
-	require.Equal(t, uint64(2*(len("cat")+8+len("meow"))), mt.approxSize,
+	require.Equal(t, uint64(2*(len("cat")+8+len("meow"))), mt.ApproxSize(),
 		"an overwrite adds to the size, it never replaces")
 }
 
@@ -355,14 +355,14 @@ func TestReplayRestoresApproximateSize(t *testing.T) {
 	require.NoError(t, mt.Put([]byte("cat"), []byte("purr")))
 	require.NoError(t, mt.Delete([]byte("dog")))
 	require.NoError(t, mt.Put([]byte("elephantine"), []byte("big")))
-	sizeBeforeCrash := mt.approxSize
+	sizeBeforeCrash := mt.ApproxSize()
 
 	mt2 := openMemtable(t, path)
 	defer mt2.Close()
 
-	require.Equal(t, sizeBeforeCrash, mt2.approxSize,
+	require.Equal(t, sizeBeforeCrash, mt2.ApproxSize(),
 		"replay must rebuild the size counter the same way mutate accumulates it")
-	require.NotZero(t, mt2.approxSize)
+	require.NotZero(t, mt2.ApproxSize())
 }
 
 // New creates the WAL file before the first Put, so a crash in that window
@@ -374,7 +374,7 @@ func TestReplayFromEmptyWAL(t *testing.T) {
 	defer mt2.Close()
 
 	require.Equal(t, uint64(0), mt2.nextSeq, "an empty WAL must resume exactly where New starts")
-	require.Equal(t, uint64(0), mt2.approxSize)
+	require.Equal(t, uint64(0), mt2.ApproxSize())
 
 	_, found := mt2.Get([]byte("cat"))
 	require.False(t, found)

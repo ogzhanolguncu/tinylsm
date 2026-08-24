@@ -23,7 +23,7 @@ type Memtable struct {
 	writer     *wal.Writer
 	nextSeq    uint64
 	mu         sync.Mutex
-	approxSize uint64
+	approxSize atomic.Uint64
 	closed     atomic.Bool
 }
 
@@ -35,10 +35,9 @@ func New(path string, seed int64) (*Memtable, error) {
 	}
 
 	return &Memtable{
-		skiplist:   skiplist,
-		writer:     writer,
-		nextSeq:    0,
-		approxSize: 0,
+		skiplist: skiplist,
+		writer:   writer,
+		nextSeq:  0,
 	}, nil
 }
 
@@ -76,12 +75,13 @@ func Open(path string, seed int64) (*Memtable, error) {
 		approxSize += uint64(len(ik)) + uint64(len(e.Value))
 	}
 
-	return &Memtable{
-		skiplist:   skiplist,
-		writer:     writer,
-		nextSeq:    nextSeq,
-		approxSize: approxSize,
-	}, nil
+	mt := &Memtable{
+		skiplist: skiplist,
+		writer:   writer,
+		nextSeq:  nextSeq,
+	}
+	mt.approxSize.Store(approxSize)
+	return mt, nil
 }
 
 func (mt *Memtable) Put(key, val []byte) error {
@@ -153,10 +153,18 @@ func (mt *Memtable) mutate(key, val []byte, kind wal.Kind) error {
 	}
 
 	mt.nextSeq++
-	mt.approxSize += uint64(len(ik)) + uint64(len(val))
+	mt.approxSize.Add(uint64(len(ik)) + uint64(len(val)))
 
 	mt.skiplist.Insert(ik, val)
 	return nil
+}
+
+func (mt *Memtable) Path() string {
+	return mt.writer.Path()
+}
+
+func (mt *Memtable) ApproxSize() uint64 {
+	return mt.approxSize.Load()
 }
 
 func (mt *Memtable) Close() error {
