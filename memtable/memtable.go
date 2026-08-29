@@ -21,7 +21,6 @@ const maxSize = 1024 * 1024 * 4
 type Memtable struct {
 	skiplist   *sl.SkipList
 	writer     *wal.Writer
-	nextSeq    uint64
 	mu         sync.Mutex
 	approxSize atomic.Uint64
 	closed     atomic.Bool
@@ -37,19 +36,18 @@ func New(path string, seed int64) (*Memtable, error) {
 	return &Memtable{
 		skiplist: skiplist,
 		writer:   writer,
-		nextSeq:  0,
 	}, nil
 }
 
-func Open(path string, seed int64) (*Memtable, error) {
+func Open(path string, seed int64) (*Memtable, uint64, error) {
 	entries, err := wal.Replay(path)
 	if err != nil {
-		return nil, fmt.Errorf("memtable: open fail: %w", err)
+		return nil, 0, fmt.Errorf("memtable: open fail: %w", err)
 	}
 
 	writer, err := wal.OpenWriter(path)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	skiplist := sl.New(keys.Compare, seed)
 
@@ -68,7 +66,7 @@ func Open(path string, seed int64) (*Memtable, error) {
 		ik, err := keys.Encode(e.Key, e.Seq, keys.Kind(e.Kind))
 		if err != nil {
 			_ = writer.Close()
-			return nil, fmt.Errorf("memtable: encode fail: %w", err)
+			return nil, 0, fmt.Errorf("memtable: encode fail: %w", err)
 		}
 
 		skiplist.Insert(ik, e.Value)
@@ -78,18 +76,17 @@ func Open(path string, seed int64) (*Memtable, error) {
 	mt := &Memtable{
 		skiplist: skiplist,
 		writer:   writer,
-		nextSeq:  nextSeq,
 	}
 	mt.approxSize.Store(approxSize)
-	return mt, nil
+	return mt, nextSeq, nil
 }
 
-func (mt *Memtable) Put(key, val []byte) error {
-	return mt.mutate(key, val, wal.KindPut)
+func (mt *Memtable) Put(key, val []byte, seq uint64) error {
+	return mt.mutate(key, val, wal.KindPut, seq)
 }
 
-func (mt *Memtable) Delete(key []byte) error {
-	return mt.mutate(key, nil, wal.KindDelete)
+func (mt *Memtable) Delete(key []byte, seq uint64) error {
+	return mt.mutate(key, nil, wal.KindDelete, seq)
 }
 
 func (mt *Memtable) Get(key []byte) ([]byte, keys.LookupState) {
@@ -122,15 +119,13 @@ func (mt *Memtable) Get(key []byte) ([]byte, keys.LookupState) {
 	return skVal, keys.Found
 }
 
-func (mt *Memtable) mutate(key, val []byte, kind wal.Kind) error {
+func (mt *Memtable) mutate(key, val []byte, kind wal.Kind, seq uint64) error {
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
 
 	if mt.closed.Load() {
 		return ErrClosed
 	}
-
-	seq := mt.nextSeq
 
 	ik, err := keys.Encode(key, seq, keys.Kind(kind))
 	if err != nil {
@@ -147,7 +142,6 @@ func (mt *Memtable) mutate(key, val []byte, kind wal.Kind) error {
 		return fmt.Errorf("memtable: append fail: %w", err)
 	}
 
-	mt.nextSeq++
 	mt.approxSize.Add(uint64(len(ik)) + uint64(len(val)))
 
 	mt.skiplist.Insert(ik, val)

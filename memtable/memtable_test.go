@@ -5,6 +5,7 @@ import (
 	"math/rand/v2"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ogzhanolguncu/tinylsm/keys"
@@ -12,24 +13,37 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newMemtable(t *testing.T) (*Memtable, string) {
+type mem struct {
+	*Memtable
+	seq atomic.Uint64
+}
+
+func (m *mem) Put(key, val []byte) error { return m.Memtable.Put(key, val, m.seq.Add(1)-1) }
+func (m *mem) Delete(key []byte) error   { return m.Memtable.Delete(key, m.seq.Add(1)-1) }
+
+// NextSeq is the seq the next write would get — what DB persists in Phase 6.
+func (m *mem) NextSeq() uint64 { return m.seq.Load() }
+
+func newMemtable(t *testing.T) (*mem, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "000000001.wal")
 	mt, err := New(path, 1)
 	require.NoError(t, err)
-	return mt, path
+	return &mem{Memtable: mt}, path
 }
 
-func openMemtable(t *testing.T, path string) *Memtable {
+func openMemtable(t *testing.T, path string) *mem {
 	t.Helper()
-	mt, err := Open(path, 1)
+	mt, nextSeq, err := Open(path, 1)
 	require.NoError(t, err)
-	return mt
+	m := &mem{Memtable: mt}
+	m.seq.Store(nextSeq)
+	return m
 }
 
 // The WAL is the only thing that survives a crash, so what it holds has to match
-// what Put was told: same keys and values, kinds intact, and seqs handed out from
-// zero without gaps or repeats.
+// what Put was told: same keys and values, kinds intact, and the seq the caller
+// handed down, recorded per record without gaps or repeats.
 func TestPutIsDurableInTheWAL(t *testing.T) {
 	mt, path := newMemtable(t)
 
@@ -68,9 +82,9 @@ func TestPutTracksApproximateSize(t *testing.T) {
 		"an overwrite adds to the size, it never replaces")
 }
 
-// Concurrent writers share one WAL file and one seq counter. Interleaved writes
-// would tear a record and strand every entry after it, and an unlocked counter
-// would hand the same seq to two writers.
+// Concurrent writers share one WAL file. Interleaved writes would tear a record
+// and strand every entry after it. The seqs come from the caller now, so this
+// also pins that mutate records the seq it was given rather than one of its own.
 func TestConcurrentPutsKeepTheWALIntact(t *testing.T) {
 	const writers = 50
 
@@ -90,7 +104,7 @@ func TestConcurrentPutsKeepTheWALIntact(t *testing.T) {
 
 	seen := make(map[uint64]bool, writers)
 	for _, e := range entries {
-		require.Falsef(t, seen[e.Seq], "seq %d handed out twice", e.Seq)
+		require.Falsef(t, seen[e.Seq], "seq %d recorded twice", e.Seq)
 		seen[e.Seq] = true
 	}
 	require.Len(t, seen, writers)
@@ -112,7 +126,7 @@ type entry struct {
 	value   string
 }
 
-func skiplistRows(t *testing.T, mt *Memtable) []entry {
+func skiplistRows(t *testing.T, mt *mem) []entry {
 	t.Helper()
 	var rows []entry
 	it := mt.skiplist.NewIterator()
@@ -285,6 +299,34 @@ func TestGetOnClosedMemtable(t *testing.T) {
 	require.ErrorIs(t, mt.Put([]byte("cat"), []byte("meow")), ErrClosed)
 }
 
+// The seq is the caller's, so mutate has one job with it: put it in the internal
+// key AND in the WAL record. Dropping it from either half looks fine in memory
+// and only surfaces after a crash — every version of a key replays at the same
+// seq, which makes them byte-identical internal keys, and the counter handed
+// back to the DB restarts far below where it left off.
+func TestReplayRestoresEachRecordsSeq(t *testing.T) {
+	mt, path := newMemtable(t)
+
+	for _, v := range []string{"1", "2", "3"} {
+		require.NoError(t, mt.Put([]byte("a"), []byte(v)))
+	}
+
+	mt2 := openMemtable(t, path)
+	defer mt2.Close()
+
+	require.Equal(t, []entry{
+		{"a", 2, keys.KindPut, "3"},
+		{"a", 1, keys.KindPut, "2"},
+		{"a", 0, keys.KindPut, "1"},
+	}, skiplistRows(t, mt2), "each version must replay under the seq it was written with")
+
+	val, state := mt2.Get([]byte("a"))
+	require.Equal(t, keys.Found, state)
+	require.Equal(t, "3", string(val))
+
+	require.Equal(t, uint64(3), mt2.NextSeq(), "Open must hand back one past the highest seq on disk")
+}
+
 // A crash is just "Close never ran". Everything Put returned success for is
 // already fsynced, so reopening has to reconstruct the exact same view: latest
 // value per key, tombstones still hiding what they hid, and seqs resuming past
@@ -334,14 +376,14 @@ func TestReplayFromCrash(t *testing.T) {
 	require.Nil(t, val)
 
 	// seqs resume past the highest on disk (6 writes => seqs 0..5)
-	require.Equal(t, uint64(6), mt2.nextSeq, "replay must resume after the highest seq on disk")
+	require.Equal(t, uint64(6), mt2.NextSeq(), "replay must resume after the highest seq on disk")
 
 	// and a post-crash write shadows the replayed one
 	require.NoError(t, mt2.Put([]byte("cat"), []byte("kebap")))
 	val, state = mt2.Get([]byte("cat"))
 	require.Equal(t, keys.Found, state)
 	require.Equal(t, "kebap", string(val))
-	require.Equal(t, uint64(7), mt2.nextSeq)
+	require.Equal(t, uint64(7), mt2.NextSeq())
 
 	// post-crash writes land in the same WAL, appended after the old ones
 	entries, err := wal.Replay(path)
@@ -378,7 +420,7 @@ func TestReplayFromEmptyWAL(t *testing.T) {
 	mt2 := openMemtable(t, path)
 	defer mt2.Close()
 
-	require.Equal(t, uint64(0), mt2.nextSeq, "an empty WAL must resume exactly where New starts")
+	require.Equal(t, uint64(0), mt2.NextSeq(), "an empty WAL must resume exactly where New starts")
 	require.Equal(t, uint64(0), mt2.ApproxSize())
 
 	_, state := mt2.Get([]byte("cat"))
@@ -413,7 +455,7 @@ func TestReplayAcrossTwoReopens(t *testing.T) {
 	require.Equal(t, keys.Found, state)
 	require.Equal(t, "woof", string(val))
 
-	require.Equal(t, uint64(3), mt3.nextSeq, "seqs run across sessions, they do not restart")
+	require.Equal(t, uint64(3), mt3.NextSeq(), "seqs run across sessions, they do not restart")
 
 	entries, err := wal.Replay(path)
 	require.NoError(t, err)
@@ -440,7 +482,7 @@ func TestRandomOpsMatchAMapOracleAcrossReopens(t *testing.T) {
 	// checks everything it could: tracking tombstones as a third state would.
 	oracle := make(map[string]string)
 
-	checkAll := func(mt *Memtable, when string) {
+	checkAll := func(mt *mem, when string) {
 		t.Helper()
 		for i := range keyspace {
 			k := key(i)
@@ -496,5 +538,5 @@ func TestRandomOpsMatchAMapOracleAcrossReopens(t *testing.T) {
 	for i, e := range entries {
 		require.Equal(t, uint64(i), e.Seq, "record %d", i)
 	}
-	require.Equal(t, uint64(len(entries)), mt.nextSeq)
+	require.Equal(t, uint64(len(entries)), mt.NextSeq())
 }
