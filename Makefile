@@ -18,7 +18,7 @@ help: ## show this help
 	@echo "  variables: PKG=$(PKG)  FUZZ=$(FUZZ)  BENCH=$(BENCH)  COUNT=$(COUNT)"
 
 run: ## go run the demo main
-	go run .
+	go run ./cmd/tinylsm
 
 test: ## run all tests
 	go test ./...
@@ -32,7 +32,7 @@ test-nocontract: ## run all tests with contracts compiled out
 test-all: test-race test-nocontract ## race + nocontract, both build configs
 
 build-prod: ## build with contracts stripped
-	go build -tags $(PROD_TAGS) -o bin/tinylsm .
+	go build -tags $(PROD_TAGS) -o bin/tinylsm ./cmd/tinylsm
 
 cover: ## coverage report per function
 	go test -cover -coverprofile=coverage.out ./...
