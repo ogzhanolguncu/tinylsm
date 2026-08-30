@@ -15,9 +15,6 @@ import (
 
 var ErrClosed = errors.New("memtable: closed")
 
-// maxSize when we hit that threshold we'll freeze this and write it out to a SSTable
-const maxSize = 1024 * 1024 * 4
-
 type Memtable struct {
 	skiplist   *sl.SkipList
 	writer     *wal.Writer
@@ -154,6 +151,10 @@ func (mt *Memtable) Path() string {
 
 func (mt *Memtable) ApproxSize() uint64 {
 	return mt.approxSize.Load()
+}
+
+func (mt *Memtable) NewIterator() *sl.SkipListIterator {
+	return mt.skiplist.NewIterator()
 }
 
 func (mt *Memtable) Close() error {
