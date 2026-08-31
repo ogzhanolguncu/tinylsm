@@ -23,7 +23,7 @@ func parseTable(t *testing.T, path string) (idx []indexEntry, raw []byte, indexO
 	require.Greater(t, uint64(len(raw)), footerSize)
 
 	footer := raw[uint64(len(raw))-footerSize:]
-	require.Equal(t, []byte("OzLSM\x00\x00\x01"), footer[16:24], "magic")
+	require.Equal(t, []byte("OzLSM\x00\x00\x02"), footer[24:32], "magic")
 	indexOff = binary.LittleEndian.Uint64(footer[0:8])
 	indexSize := binary.LittleEndian.Uint64(footer[8:16])
 	require.Equal(t, uint64(len(raw)), indexOff+indexSize+footerSize, "footer must cover the file")
@@ -154,7 +154,7 @@ func TestOpenTableRejectsCorruption(t *testing.T) {
 			return raw[:footerSize-1]
 		}, ErrBlockCorrupt},
 		{"bad magic", func(raw []byte) []byte {
-			footerAt(raw)[23] ^= 0xff
+			footerAt(raw)[31] ^= 0xff
 			return raw
 		}, ErrBadMagic},
 		{"indexSize overruns file", func(raw []byte) []byte {

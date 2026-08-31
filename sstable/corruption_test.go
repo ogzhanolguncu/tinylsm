@@ -247,7 +247,7 @@ func TestIndexEntryWithMalformedHandleIsRejectedOnUse(t *testing.T) {
 			footer := make([]byte, footerSize)
 			binary.LittleEndian.PutUint64(footer[0:8], indexOff)
 			binary.LittleEndian.PutUint64(footer[8:16], uint64(len(index)))
-			binary.LittleEndian.PutUint64(footer[16:24], tableMagic)
+			binary.LittleEndian.PutUint64(footer[24:32], tableMagic)
 
 			bad := append(append(bytes.Clone(raw[:indexOff]), index...), footer...)
 			path := filepath.Join(dir, FileName(2))

@@ -1,9 +1,9 @@
-// A table is a finished .sst file: data blocks, then an index block whose
+// Package sstable is a finished .sst file: data blocks, then an index block whose
 // entries map each data block's last internal key to that block's location,
 // then a fixed-width footer.
 //
 //	table  := dataBlock* | indexBlock | footer
-//	footer := indexHandle (16) | magic (8)
+//	footer := indexHandle (16) | maxSeq(8) | magic (8)
 //	handle := off (8) | size (8), little-endian
 package sstable
 
@@ -20,11 +20,11 @@ import (
 )
 
 const (
-	footerSize uint64 = 24
+	footerSize uint64 = 32
 	// blockHandleSize is an off|size pair: two little-endian uint64s.
 	blockHandleSize = 16
 	// tableMagic identifies a tinylsm SSTable.
-	tableMagic uint64 = 0x0100004D534C7A4F
+	tableMagic uint64 = 0x0200004D534C7A4F
 )
 
 var ErrBadMagic = errors.New("sstable: bad magic")
@@ -36,10 +36,11 @@ type indexEntry struct {
 }
 
 type Writer struct {
-	idx []indexEntry
-	bb  *blockBuilder
-	f   *os.File
-	off uint64
+	idx    []indexEntry
+	bb     *blockBuilder
+	f      *os.File
+	off    uint64
+	maxSeq uint64
 }
 
 func NewWriter(path string) (*Writer, error) {
@@ -65,6 +66,11 @@ func NewWriter(path string) (*Writer, error) {
 }
 
 func (tw *Writer) Add(key, val []byte) error {
+	_, maxSeq, _, err := keys.Decode(key)
+	if err != nil {
+		return err
+	}
+	tw.maxSeq = max(maxSeq, tw.maxSeq)
 	tw.bb.Add(key, val)
 	if tw.bb.Full() {
 		return tw.flushBlock()
@@ -96,7 +102,8 @@ func (tw *Writer) Finish() error {
 	footer := make([]byte, footerSize)
 	binary.LittleEndian.PutUint64(footer[0:8], indexOff)
 	binary.LittleEndian.PutUint64(footer[8:16], indexSize)
-	binary.LittleEndian.PutUint64(footer[16:24], tableMagic)
+	binary.LittleEndian.PutUint64(footer[16:24], tw.maxSeq)
+	binary.LittleEndian.PutUint64(footer[24:32], tableMagic)
 	if _, err := tw.f.Write(footer); err != nil {
 		return err
 	}
@@ -138,9 +145,10 @@ func (tw *Writer) flushBlock() error {
 }
 
 type Table struct {
-	f     *os.File
-	fsize uint64
-	index *block
+	f      *os.File
+	fsize  uint64
+	index  *block
+	maxSeq uint64
 }
 
 // 16-byte off|size pair, LevelDB calls this a BlockHandle.
@@ -197,10 +205,16 @@ func Open(path string) (_ *Table, err error) {
 		return nil, fmt.Errorf("failed to read footer %w", err)
 	}
 
-	magic := binary.LittleEndian.Uint64(footer[blockHandleSize:footerSize])
+	magic := binary.LittleEndian.Uint64(footer[24:footerSize])
 	if magic != tableMagic {
 		return nil, ErrBadMagic
 	}
+
+	maxSeq := binary.LittleEndian.Uint64(footer[16:24])
+	if maxSeq > keys.MaxSeq {
+		return nil, ErrBlockCorrupt
+	}
+
 	off, size, err := blockHandle(footer[:blockHandleSize])
 	if err != nil {
 		return nil, err
@@ -215,9 +229,10 @@ func Open(path string) (_ *Table, err error) {
 	}
 
 	return &Table{
-		index: idx,
-		f:     f,
-		fsize: uint64(fsize),
+		index:  idx,
+		f:      f,
+		fsize:  uint64(fsize),
+		maxSeq: maxSeq,
 	}, nil
 }
 
@@ -266,6 +281,8 @@ func (t *Table) Get(target []byte) ([]byte, keys.LookupState, error) {
 	}
 	return nil, keys.NotFound, nil
 }
+
+func (t *Table) MaxSeq() uint64 { return t.maxSeq }
 
 func (t *Table) NewIterator() *Iter {
 	return &Iter{
