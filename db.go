@@ -53,14 +53,14 @@ func Open(dir string, opts Options) (*DB, error) {
 		return nil, err
 	}
 
-	max := uint64(0)
+	maxFileNum := uint64(0)
 	for _, m := range sstMatches {
 		n, err := strconv.ParseUint(filepath.Base(m)[:9], 10, 64)
 		if err != nil {
 			return nil, err
 		}
-		if n > max {
-			max = n
+		if n > maxFileNum {
+			maxFileNum = n
 		}
 	}
 
@@ -69,8 +69,8 @@ func Open(dir string, opts Options) (*DB, error) {
 		if err != nil {
 			return nil, err
 		}
-		if n > max {
-			max = n
+		if n > maxFileNum {
+			maxFileNum = n
 		}
 	}
 
@@ -79,7 +79,7 @@ func Open(dir string, opts Options) (*DB, error) {
 
 	// One counter, bumped everywhere a file number is taken — including here,
 	// or the first freeze() hands out this WAL's number a second time.
-	nextFileNum := max + 1
+	nextFileNum := maxFileNum + 1
 
 	if len(walMatches) == 0 {
 		num := nextFileNum
@@ -117,6 +117,7 @@ func Open(dir string, opts Options) (*DB, error) {
 			}
 			return nil, fmt.Errorf("open sstable %s: %w", m, err)
 		}
+		nextSeq = max(nextSeq, t.MaxSeq()+1)
 		l0 = append(l0, t)
 	}
 
