@@ -15,6 +15,8 @@ import (
 	"github.com/ogzhanolguncu/tinylsm/wal"
 )
 
+var ErrUnknownFileName = errors.New("tinylsm: unknown file name")
+
 // maxSize when we hit that threshold we'll freeze this and write it out to a SSTable
 const (
 	memBytesMax  = 1024 * 1024 * 4
@@ -56,7 +58,7 @@ func Open(dir string, opts Options) (*DB, error) {
 
 	maxFileNum := uint64(0)
 	for _, m := range sstMatches {
-		n, err := strconv.ParseUint(filepath.Base(m)[:9], 10, 64)
+		n, err := parseFileNum(m)
 		if err != nil {
 			return nil, err
 		}
@@ -66,7 +68,7 @@ func Open(dir string, opts Options) (*DB, error) {
 	}
 
 	for _, m := range walMatches {
-		n, err := strconv.ParseUint(filepath.Base(m)[:9], 10, 64)
+		n, err := parseFileNum(m)
 		if err != nil {
 			return nil, err
 		}
@@ -262,4 +264,13 @@ func (db *DB) Close() error {
 	}
 	errs = append(errs, db.mem.Close())
 	return errors.Join(errs...)
+}
+
+func parseFileNum(base string) (uint64, error) {
+	b := filepath.Base(base)
+	// Its 9 digits + 1 dot + 3 file extension sst | wal
+	if len(b) != 13 {
+		return 0, ErrUnknownFileName
+	}
+	return strconv.ParseUint(filepath.Base(b)[:9], 10, 64)
 }

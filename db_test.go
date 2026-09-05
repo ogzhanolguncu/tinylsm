@@ -243,3 +243,15 @@ func TestConcurrentWritesGetDistinctSeqs(t *testing.T) {
 	}
 	require.Len(t, seen, writers, "seqs must be dense, not just distinct")
 }
+
+func TestOpenRejectsMalformedFileNames(t *testing.T) {
+	for _, name := range []string{"x.sst", "12.wal", "0000000001.sst"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(dir, name), nil, 0o644))
+
+			_, err := Open(dir, Options{})
+			require.ErrorIs(t, err, ErrUnknownFileName)
+		})
+	}
+}
