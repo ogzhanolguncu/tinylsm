@@ -1,6 +1,7 @@
 package tinylsm
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -115,6 +116,7 @@ func Open(dir string, opts Options) (*DB, error) {
 			for _, opened := range l0 {
 				_ = opened.Close()
 			}
+			_ = mem.Close()
 			return nil, fmt.Errorf("open sstable %s: %w", m, err)
 		}
 		nextSeq = max(nextSeq, t.MaxSeq()+1)
@@ -251,5 +253,13 @@ func (db *DB) freeze() error {
 func (db *DB) Close() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	return db.mem.Close()
+	errs := []error{}
+	if db.imm != nil {
+		errs = append(errs, db.imm.Close())
+	}
+	for _, t := range db.l0 {
+		errs = append(errs, t.Close())
+	}
+	errs = append(errs, db.mem.Close())
+	return errors.Join(errs...)
 }

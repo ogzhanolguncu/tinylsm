@@ -2,9 +2,11 @@ package tinylsm
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/ogzhanolguncu/tinylsm/keys"
 	"github.com/stretchr/testify/require"
 )
 
@@ -220,4 +222,21 @@ func TestZeroThresholdUsesTheDefault(t *testing.T) {
 	fill(t, db, "k", 50)
 
 	require.Equal(t, 0, countSSTs(t, dir), "50 small writes are nowhere near the default threshold")
+}
+
+// Close must release every L0 table, not just the memtable. A closed table's
+// fd is gone, so any read through it has to fail.
+func TestCloseReleasesL0Tables(t *testing.T) {
+	db, _ := newDBWith(t, Options{MemtableThreshold: tinyThreshold})
+	fill(t, db, "k", 20)
+	require.NotEmpty(t, db.l0)
+
+	require.NoError(t, db.Close())
+
+	ik, err := keys.Encode([]byte("k000"), keys.MaxSeq, keys.KindPut)
+	require.NoError(t, err)
+	for _, tbl := range db.l0 {
+		_, _, err := tbl.Get(ik)
+		require.ErrorIs(t, err, os.ErrClosed)
+	}
 }

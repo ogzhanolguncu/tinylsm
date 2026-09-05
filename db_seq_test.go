@@ -26,10 +26,6 @@ func sstMaxSeq(t *testing.T, dir string) uint64 {
 	return high
 }
 
-// dropWALs removes every WAL, leaving a directory whose only surviving data is
-// in SSTables. That is the state a DB reaches once everything it wrote has been
-// flushed and those WALs deleted; recovery must then get its seqnums from the
-// tables, because there is nowhere else left to get them.
 func dropWALs(t *testing.T, dir string) {
 	t.Helper()
 	matches, err := filepath.Glob(filepath.Join(dir, "*.wal"))
@@ -39,12 +35,6 @@ func dropWALs(t *testing.T, dir string) {
 	}
 }
 
-// THE invariant: every seqnum handed out is strictly greater than every seqnum
-// any surviving data already holds — across every reopen, forever. Break it and
-// a later write gets a *lower* seq than the write it supersedes, so "highest seq
-// wins" silently returns the older value. Get's newest-file-first walk masks it
-// today; Phase 7's merge iterator, which orders by seq rather than by file
-// position, does not.
 func TestReopenRecoversSeqFromSSTablesWhenWALsAreGone(t *testing.T) {
 	dir := t.TempDir()
 
@@ -68,9 +58,6 @@ func TestReopenRecoversSeqFromSSTablesWhenWALsAreGone(t *testing.T) {
 		reopened.nextSeq, high)
 }
 
-// The WAL and the SSTables are two independent lower bounds and recovery takes
-// the larger. This is the direction that catches dropping the WAL's own
-// contribution while adding the tables'.
 func TestReopenSeqIsMaxOfWALAndSSTables(t *testing.T) {
 	dir := t.TempDir()
 
@@ -94,13 +81,6 @@ func TestReopenSeqIsMaxOfWALAndSSTables(t *testing.T) {
 		"recovery must not lose the WAL's high-water mark")
 }
 
-// Across repeated reopens that each lose their WAL, the next seq must always
-// exceed everything that survived. Note it may legitimately sit *below* the
-// pre-close counter: dropping a WAL discards the writes it held, so the
-// high-water mark falls back to one above the newest surviving table entry.
-// What must never happen is landing at or below a seq that survived, which
-// would put two different entries at one seqnum and break both "highest seq
-// wins" and the skiplist's distinct-key assumption.
 func TestSeqAlwaysExceedsSurvivingDataAcrossRepeatedReopens(t *testing.T) {
 	dir := t.TempDir()
 	prevSurviving := uint64(0)
