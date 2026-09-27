@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/ogzhanolguncu/tinylsm/memtable"
 	"github.com/ogzhanolguncu/tinylsm/wal"
 	"github.com/stretchr/testify/require"
 )
@@ -186,14 +187,34 @@ func TestTwoReopens(t *testing.T) {
 // Only milestone 4 creates a second WAL. Until then two of them means the
 // directory is in a state Open cannot reason about, and picking one would
 // silently drop whatever is in the other.
-func TestOpenRejectsMoreThanOneWAL(t *testing.T) {
+// Two WALs on disk = crash between freeze and flush. Both must be recovered,
+// and the newer WAL's value must win.
+func TestOpenRecoversTwoWALs(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, wal.FileName(1)), nil, 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, wal.FileName(2)), nil, 0o644))
-
 	db, err := Open(dir, Options{})
-	require.Error(t, err)
-	require.Nil(t, db)
+	require.NoError(t, err)
+	require.NoError(t, db.Put([]byte("a"), []byte("old")))
+	require.NoError(t, db.Put([]byte("b"), []byte("only-old")))
+	require.NoError(t, db.Close())
+
+	mt, err := memtable.New(filepath.Join(dir, wal.FileName(100)), skiplistSeed)
+	require.NoError(t, err)
+	require.NoError(t, mt.Put([]byte("a"), []byte("new"), 50))
+	require.NoError(t, mt.Close())
+
+	db, err = Open(dir, Options{})
+	require.NoError(t, err)
+	defer db.Close()
+	for k, want := range map[string]string{"a": "new", "b": "only-old"} {
+		v, ok, err := db.Get([]byte(k))
+		require.NoError(t, err)
+		require.True(t, ok, k)
+		require.Equal(t, want, string(v), k)
+	}
+
+	wals, err := filepath.Glob(filepath.Join(dir, "*.wal"))
+	require.NoError(t, err)
+	require.Len(t, wals, 1)
 }
 
 func TestOpenCreatesTheDirectory(t *testing.T) {
@@ -245,7 +266,7 @@ func TestConcurrentWritesGetDistinctSeqs(t *testing.T) {
 }
 
 func TestOpenRejectsMalformedFileNames(t *testing.T) {
-	for _, name := range []string{"x.sst", "12.wal", "0000000001.sst"} {
+	for _, name := range []string{"x.wal", "12.wal", "0000000001.wal"} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
 			require.NoError(t, os.WriteFile(filepath.Join(dir, name), nil, 0o644))
@@ -254,4 +275,27 @@ func TestOpenRejectsMalformedFileNames(t *testing.T) {
 			require.ErrorIs(t, err, ErrUnknownFileName)
 		})
 	}
+}
+
+func TestReopenKeepsOneManifest(t *testing.T) {
+	dir := t.TempDir()
+	for range 3 {
+		db, err := Open(dir, Options{})
+		require.NoError(t, err)
+		require.NoError(t, db.Close())
+	}
+	m, err := filepath.Glob(filepath.Join(dir, "MANIFEST-*"))
+	require.NoError(t, err)
+	require.Len(t, m, 1)
+}
+
+func TestOpenDeletesOrphanSSTables(t *testing.T) {
+	dir := t.TempDir()
+	orphan := filepath.Join(dir, "000000099.sst")
+	require.NoError(t, os.WriteFile(orphan, nil, 0o644))
+
+	db, err := Open(dir, Options{})
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+	require.NoFileExists(t, orphan)
 }
