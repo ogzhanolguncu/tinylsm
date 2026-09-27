@@ -7,6 +7,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+
+	"github.com/ogzhanolguncu/tinylsm/pkg/frame"
 )
 
 type Writer struct {
@@ -122,7 +124,7 @@ func Replay(path string) ([]Entry, error) {
 	}
 
 	for off < fileEnd {
-		size, ok := frameSize(data[off:])
+		size, ok := frame.FrameSize(data[off:])
 		if !ok {
 			return dropBrokenTail() // not even a full header left
 		}

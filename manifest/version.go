@@ -22,6 +22,14 @@ type Version struct {
 	LastSeq     uint64
 }
 
+func NewVersion() *Version {
+	return &Version{
+		Files:       [7][]FileMeta{},
+		LastSeq:     0,
+		NextFileNum: 0,
+	}
+}
+
 func (v *Version) Apply(e VersionEdit) *Version {
 	var files [NumLevels][]FileMeta
 	for i := range files {

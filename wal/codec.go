@@ -7,6 +7,7 @@ import (
 	"hash/crc32"
 
 	"github.com/ogzhanolguncu/tinylsm/keys"
+	"github.com/ogzhanolguncu/tinylsm/pkg/frame"
 	"github.com/ogzhanolguncu/tinylsm/pkg/uvarint"
 )
 
@@ -17,25 +18,18 @@ type Entry struct {
 }
 
 var (
-	ErrTruncated    = errors.New("wal: truncated record")
-	ErrChecksum     = errors.New("wal: checksum mismatch")
 	ErrMalformed    = errors.New("wal: malformed record")
 	ErrInvalidInput = errors.New("wal: invalid input")
 )
 
 const (
-	// frame offsets — crc + len header, not covered by CRC
-	offCRC     = 0          // uint32, 4 bytes
-	offLen     = offCRC + 4 // uint32, 4 bytes
-	headerSize = offLen + 4 // payload starts here (= 8)
-
 	// payload-relative offsets — CRC covers all of payload
 	pOffSeq    = 0            // uint64, 8 bytes
 	pOffKind   = pOffSeq + 8  // byte,   1 byte
 	pOffKeyLen = pOffKind + 1 // varint begins — last fixed offset (= 9)
 )
 
-const minRecordSize = headerSize + pOffKeyLen + 2 // two 1-byte varints: keyLen=0, valLen=0
+const minRecordSize = frame.HeaderSize + pOffKeyLen + 2 // two 1-byte varints: keyLen=0, valLen=0
 
 var Castagnoli = crc32.MakeTable(crc32.Castagnoli)
 
@@ -53,7 +47,7 @@ func encode(entry Entry) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("payload construction: %w", err)
 	}
-	return frame(p), nil
+	return frame.Frame(p), nil
 }
 
 func buildPayload(entry Entry) ([]byte, error) {
@@ -76,54 +70,17 @@ func buildPayload(entry Entry) ([]byte, error) {
 	return p, nil
 }
 
-func frame(p []byte) []byte {
-	rec := binary.LittleEndian.AppendUint32(nil, crc32.Checksum(p, Castagnoli))
-	rec = binary.LittleEndian.AppendUint32(rec, uint32(len(p)))
-	return append(rec, p...)
-}
-
-// frameSize reports the full record size (header + payload) the header at
-// the front of rec claims, or false if rec holds no complete header.
-func frameSize(rec []byte) (int, bool) {
-	if len(rec) < headerSize {
-		return 0, false
-	}
-
-	n := binary.LittleEndian.Uint32(rec[offLen:headerSize])
-	return headerSize + int(n), true
-}
-
-func validateFrame(rec []byte) ([]byte, int, error) {
-	if len(rec) < minRecordSize {
-		return nil, 0, ErrTruncated
-	}
-
-	crc := binary.LittleEndian.Uint32(rec[offCRC:offLen])
-	length := binary.LittleEndian.Uint32(rec[offLen:headerSize])
-
-	if int(length) < minRecordSize-headerSize {
-		return nil, 0, ErrMalformed
-	}
-	if int(length) > len(rec)-headerSize {
-		return nil, 0, ErrTruncated
-	}
-
-	p := rec[headerSize : headerSize+length]
-
-	if crc32.Checksum(p, Castagnoli) != crc {
-		return nil, 0, ErrChecksum
-	}
-	return p, int(length), nil
-}
-
 // decode parses one framed record from rec
 // zero-copy, Entry.key and Entry.value alias rec's memory.
 // They are valid only until caller modifies or reuses rec
 // Callers that retain the Entry should copy to be safe
 func decode(rec []byte) (Entry, int, error) {
-	payload, length, err := validateFrame(rec)
+	payload, length, err := frame.ValidateFrame(rec)
 	if err != nil {
 		return Entry{}, 0, fmt.Errorf("validate frame: %w", err)
+	}
+	if int(length) < minRecordSize-frame.HeaderSize {
+		return Entry{}, 0, ErrMalformed
 	}
 
 	seq := binary.LittleEndian.Uint64(payload[pOffSeq:pOffKind])
@@ -171,5 +128,5 @@ func decode(rec []byte) (Entry, int, error) {
 		Value: value,
 		Seq:   seq,
 		Kind:  kind,
-	}, off + headerSize, nil
+	}, off + frame.HeaderSize, nil
 }

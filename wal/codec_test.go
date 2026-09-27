@@ -6,6 +6,7 @@ import (
 	"hash/crc32"
 	"testing"
 
+	"github.com/ogzhanolguncu/tinylsm/pkg/frame"
 	"github.com/stretchr/testify/require"
 )
 
@@ -67,8 +68,8 @@ func TestSingleBitCorruption(t *testing.T) {
 		rec[i] ^= 0xFF
 		_, _, err := decode(rec)
 		require.Errorf(t, err, "byte %d flipped: want error", i)
-		if i >= headerSize {
-			require.ErrorIsf(t, err, ErrChecksum, "payload byte %d flipped", i)
+		if i >= frame.HeaderSize {
+			require.ErrorIsf(t, err, frame.ErrChecksum, "payload byte %d flipped", i)
 		}
 	}
 }
@@ -78,8 +79,8 @@ func TestSingleBitCorruption(t *testing.T) {
 // the structural guard — not the checksum — must reject it.
 func TestLengthLiesSmall(t *testing.T) {
 	rec := mustEncode(t, []byte("cat"), []byte("purr"), 7, KindPut)
-	binary.LittleEndian.PutUint32(rec[offLen:headerSize], 5)
-	binary.LittleEndian.PutUint32(rec[offCRC:offLen], crc32.Checksum(rec[headerSize:headerSize+5], Castagnoli))
+	binary.LittleEndian.PutUint32(rec[frame.OffLen:frame.HeaderSize], 5)
+	binary.LittleEndian.PutUint32(rec[frame.OffCRC:frame.OffLen], crc32.Checksum(rec[frame.HeaderSize:frame.HeaderSize+5], Castagnoli))
 	_, _, err := decode(rec)
 	require.ErrorIs(t, err, ErrMalformed)
 }
@@ -90,7 +91,7 @@ func TestKeyLenLies(t *testing.T) {
 	p = append(p, byte(KindPut))
 	p = binary.AppendUvarint(p, 200) // keyLen claims 200...
 	p = append(p, 'x')               // ...one byte follows
-	_, _, err := decode(frame(p))
+	_, _, err := decode(frame.Frame(p))
 	require.ErrorIs(t, err, ErrMalformed)
 }
 
@@ -100,7 +101,7 @@ func TestIncompleteVarint(t *testing.T) {
 	p := binary.LittleEndian.AppendUint64(nil, 7)
 	p = append(p, byte(KindPut))
 	p = append(p, 0x80, 0x80) // varint never terminates
-	_, _, err := decode(frame(p))
+	_, _, err := decode(frame.Frame(p))
 	require.ErrorIs(t, err, ErrMalformed)
 }
 
@@ -114,7 +115,7 @@ func TestUnknownKindRejected(t *testing.T) {
 	p = append(p, 'k')
 	p = binary.AppendUvarint(p, 1)
 	p = append(p, 'v')
-	_, _, err := decode(frame(p))
+	_, _, err := decode(frame.Frame(p))
 	require.ErrorIs(t, err, ErrMalformed)
 }
 
@@ -126,7 +127,7 @@ func TestPayloadSlackRejected(t *testing.T) {
 	p, err := buildPayload(Entry{Key: []byte("cat"), Value: []byte("purr"), Seq: 7, Kind: KindPut})
 	require.NoError(t, err)
 	p = append(p, 0xDE, 0xAD, 0xBE, 0xEF) // slack no field accounts for
-	_, _, err = decode(frame(p))
+	_, _, err = decode(frame.Frame(p))
 	require.ErrorIs(t, err, ErrMalformed)
 }
 
@@ -170,7 +171,7 @@ func FuzzDecode(f *testing.F) {
 	if rec, err := encode(Entry{Key: []byte("cat"), Value: []byte("purr"), Seq: 7, Kind: KindPut}); err == nil {
 		f.Add(rec)
 	}
-	f.Add(frame([]byte{0x80, 0x80, 0x80}))
+	f.Add(frame.Frame([]byte{0x80, 0x80, 0x80}))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		decode(data) // any error is fine; a panic fails the fuzz run
 	})

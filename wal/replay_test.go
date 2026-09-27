@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ogzhanolguncu/tinylsm/pkg/frame"
 	"github.com/stretchr/testify/require"
 )
 
@@ -84,7 +85,7 @@ func TestReplayRefusesMidFileCorruption(t *testing.T) {
 
 	// flip one payload byte inside the FIRST record
 	corrupted := append([]byte{}, data...)
-	corrupted[headerSize] ^= 0xFF
+	corrupted[frame.HeaderSize] ^= 0xFF
 	require.Greater(t, len(ends), 1, "fixture must have records after the first")
 
 	path := filepath.Join(t.TempDir(), "corrupt.wal")
