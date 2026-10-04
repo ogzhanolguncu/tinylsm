@@ -5,6 +5,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	tinylsm "github.com/ogzhanolguncu/tinylsm"
+	"github.com/ogzhanolguncu/tinylsm/keys"
 )
 
 const (
@@ -136,7 +138,11 @@ func (sh *shell) run(args []string) bool {
 	case "reset":
 		sh.reset()
 	case "scan":
-		locked("scan", "Phase 7 — merge iterator")
+		if len(rest) > 0 && rest[0] == "--raw" {
+			sh.rawScan(intArg(rest[1:], 30))
+		} else {
+			locked("scan", "Phase 7 level 2 — dedup")
+		}
 	case "compact":
 		locked("compact", "Phase 8 — compaction")
 	case "help", "?":
@@ -270,6 +276,48 @@ func (sh *shell) bench(n int) {
 	}
 }
 
+func (sh *shell) rawScan(limit int) {
+	n, shown := 0, 0
+	var prevUser []byte
+	start := time.Now()
+	sh.db.RawScan(func(ik, val []byte) bool {
+		n++
+		if shown >= limit {
+			return true // keep counting
+		}
+		shown++
+		user, seq, kind, err := keys.Decode(ik)
+		if err != nil {
+			fmt.Printf("  %sbad key:%s %v\n", red, reset, err)
+			return false
+		}
+		// older versions of the same key: what Level 2 will hide
+		older := bytes.Equal(user, prevUser)
+		prevUser = append(prevUser[:0], user...)
+		switch {
+		case kind == keys.KindDelete:
+			fmt.Printf("  %s%-16s seq %-6d 🪦 tombstone%s\n", red, user, seq, reset)
+		case older:
+			fmt.Printf("  %s%-16s seq %-6d %s  (older version, shadowed)%s\n", dim, user, seq, preview(val), reset)
+		default:
+			fmt.Printf("  %s%-16s%s seq %-6d %s\n", bold, user, reset, seq, preview(val))
+		}
+		return true
+	})
+	if n > shown {
+		fmt.Printf("  %s… %d more%s\n", dim, n-shown, reset)
+	}
+	fmt.Printf("%s✓ merged %d entries%s from memtable + %d tables in %s\n",
+		green, n, reset, len(sh.db.Stats().L0), time.Since(start).Round(time.Microsecond))
+}
+
+func preview(v []byte) string {
+	if len(v) > 24 {
+		return fmt.Sprintf("%q…", v[:24])
+	}
+	return fmt.Sprintf("%q", v)
+}
+
 func (sh *shell) stats() {
 	s := sh.db.Stats()
 	fill := float64(s.MemBytes) / float64(s.MemThreshold)
@@ -396,9 +444,10 @@ func help() {
   %sdel%s <k>         write a tombstone    %sstats%s         memtable + L0 picture
   %scrash%s           SIGKILL myself, then restart to verify recovery
   %sreset%s           wipe the data dir    %squit%s          close cleanly
+  %sscan --raw%s [n]  every version + tombstone, merged across all tables
   %sscan  compact   🔒 locked — unlock them by building Phase 7 and 8%s
 
-`, cyan, reset, cyan, reset, cyan, reset, cyan, reset, cyan, reset, cyan, reset, red, reset, yellow, reset, cyan, reset, dim, reset)
+`, cyan, reset, cyan, reset, cyan, reset, cyan, reset, cyan, reset, cyan, reset, red, reset, yellow, reset, cyan, reset, cyan, reset, dim, reset)
 }
 
 func locked(cmd, phase string) {

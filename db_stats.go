@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/ogzhanolguncu/tinylsm/merge"
 	"github.com/ogzhanolguncu/tinylsm/sstable"
 )
 
@@ -39,4 +40,26 @@ func (db *DB) Stats() Stats {
 		s.L0 = append(s.L0, ts)
 	}
 	return s
+}
+
+// RawScan walks every entry the DB holds, in internal-key order: all versions,
+// tombstones included. Tooling only: it holds the read lock for the whole walk,
+// which a real Scan must not do.
+func (db *DB) RawScan(fn func(internalKey, val []byte) bool) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	children := []merge.Iterator{db.mem.NewIterator()}
+	if db.imm != nil {
+		children = append(children, db.imm.NewIterator())
+	}
+	for _, t := range db.l0 {
+		children = append(children, t.NewIterator())
+	}
+	m := merge.New(children)
+	for m.SeekToFirst(); m.Valid(); m.Next() {
+		if !fn(m.Key(), m.Value()) {
+			return
+		}
+	}
 }
