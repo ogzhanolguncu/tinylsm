@@ -49,6 +49,30 @@ func (db *DB) RawScan(fn func(internalKey, val []byte) bool) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
+	m := merge.New(db.children())
+	for m.SeekToFirst(); m.Valid(); m.Next() {
+		if !fn(m.Key(), m.Value()) {
+			return
+		}
+	}
+}
+
+// Scan walks every live user key in order with its newest value. Same
+// read-lock caveat as RawScan.
+func (db *DB) Scan(fn func(key, val []byte) bool) error {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	d := merge.NewDBIter(merge.New(db.children()))
+	for d.SeekToFirst(); d.Valid(); d.Next() {
+		if !fn(d.Key(), d.Value()) {
+			break
+		}
+	}
+	return d.Error()
+}
+
+func (db *DB) children() []merge.Iterator {
 	children := []merge.Iterator{db.mem.NewIterator()}
 	if db.imm != nil {
 		children = append(children, db.imm.NewIterator())
@@ -56,10 +80,5 @@ func (db *DB) RawScan(fn func(internalKey, val []byte) bool) {
 	for _, t := range db.l0 {
 		children = append(children, t.NewIterator())
 	}
-	m := merge.New(children)
-	for m.SeekToFirst(); m.Valid(); m.Next() {
-		if !fn(m.Key(), m.Value()) {
-			return
-		}
-	}
+	return children
 }

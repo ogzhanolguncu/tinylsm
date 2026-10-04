@@ -141,7 +141,7 @@ func (sh *shell) run(args []string) bool {
 		if len(rest) > 0 && rest[0] == "--raw" {
 			sh.rawScan(intArg(rest[1:], 30))
 		} else {
-			locked("scan", "Phase 7 level 2 — dedup")
+			sh.scan(intArg(rest, 30))
 		}
 	case "compact":
 		locked("compact", "Phase 8 — compaction")
@@ -311,6 +311,26 @@ func (sh *shell) rawScan(limit int) {
 		green, n, reset, len(sh.db.Stats().L0), time.Since(start).Round(time.Microsecond))
 }
 
+func (sh *shell) scan(limit int) {
+	n := 0
+	start := time.Now()
+	err := sh.db.Scan(func(k, v []byte) bool {
+		if n < limit {
+			fmt.Printf("  %s%-16s%s = %s\n", bold, k, reset, preview(v))
+		}
+		n++
+		return true
+	})
+	if err != nil {
+		fmt.Printf("%serror:%s %v\n", red, reset, err)
+	}
+	if n > limit {
+		fmt.Printf("  %s… %d more%s\n", dim, n-limit, reset)
+	}
+	fmt.Printf("%s✓ %d live keys%s in %s  %s(scan --raw shows what got filtered out)%s\n",
+		green, n, reset, time.Since(start).Round(time.Microsecond), dim, reset)
+}
+
 func preview(v []byte) string {
 	if len(v) > 24 {
 		return fmt.Sprintf("%q…", v[:24])
@@ -444,10 +464,11 @@ func help() {
   %sdel%s <k>         write a tombstone    %sstats%s         memtable + L0 picture
   %scrash%s           SIGKILL myself, then restart to verify recovery
   %sreset%s           wipe the data dir    %squit%s          close cleanly
+  %sscan%s [n]       live keys, newest value each, in order
   %sscan --raw%s [n]  every version + tombstone, merged across all tables
-  %sscan  compact   🔒 locked — unlock them by building Phase 7 and 8%s
+  %sscan <a> <b>  compact   🔒 locked — Phase 7 level 3 and Phase 8%s
 
-`, cyan, reset, cyan, reset, cyan, reset, cyan, reset, cyan, reset, cyan, reset, red, reset, yellow, reset, cyan, reset, cyan, reset, dim, reset)
+`, cyan, reset, cyan, reset, cyan, reset, cyan, reset, cyan, reset, cyan, reset, red, reset, yellow, reset, cyan, reset, cyan, reset, cyan, reset, dim, reset)
 }
 
 func locked(cmd, phase string) {
