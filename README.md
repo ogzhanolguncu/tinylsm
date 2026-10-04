@@ -26,7 +26,7 @@ compaction only            1.7 µs        1.6 µs
 
 Some improvements I'd do if I had the energy
 
-Block cache, every table read is a `pread` plus a CRC check, even for hot keys. I'd love to reach for `mmap` like in tinycask, but an LSM juggles far more files than Bitcask, with compaction deleting them mid-read, so a lazily done mmap would probably break things.
+Block cache, every table read is a `pread` plus a CRC check, even for hot keys. I'd love to use for `mmap` like in tinycask, but an LSM uses far more files than Bitcask, with compaction deleting them mid-read, so a lazily done mmap would probably break things.
 
 Leveled compaction, right now every compaction rewrites everything.
 
