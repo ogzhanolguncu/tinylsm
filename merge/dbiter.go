@@ -8,11 +8,12 @@ import (
 )
 
 type DBIter struct {
-	it       Iterator
-	key, val []byte
-	valid    bool
-	err      error
-	snapshot uint64 // entries with seq >= snapshot were written after the scan
+	it        Iterator
+	key, val  []byte
+	valid     bool
+	err       error
+	snapshot  uint64 // entries with seq >= snapshot were written after the scan
+	currentIk []byte
 }
 
 // NewDBIter shows the data as of snapshot: pass the DB's next seq at the
@@ -38,14 +39,15 @@ func (d *DBIter) findNextLive() {
 		}
 
 		if seq >= d.snapshot {
+			d.it.Next() // written after the scan began: step past just this entry
 			continue
 		}
 
 		switch kind {
 		case keys.KindPut:
-
 			d.key = bytes.Clone(uk)
 			d.val = bytes.Clone(d.it.Value())
+			d.currentIk = bytes.Clone(d.it.Key())
 			d.valid = true
 			return
 		case keys.KindDelete:
@@ -98,3 +100,5 @@ func (d *DBIter) Seek(userKey []byte) {
 	d.it.Seek(ik)
 	d.findNextLive()
 }
+
+func (d *DBIter) InternalKey() []byte { return d.currentIk }

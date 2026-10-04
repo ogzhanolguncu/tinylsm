@@ -133,3 +133,12 @@ func TestDBIterSnapshot(t *testing.T) {
 	require.Equal(t, []string{"bob=50", "carol=5"}, liveFrom(d, "b"))
 	require.Equal(t, []string{"alice=70", "bob=80", "dave=1"}, drainLive(NewDBIter(New([]Iterator{src}), keys.MaxSeq)))
 }
+
+func TestDBIterInternalKeyKeepsOriginalSeq(t *testing.T) {
+	d := replData(t)
+	var got []string
+	for d.SeekToFirst(); d.Valid(); d.Next() {
+		got = append(got, show(t, []entry{{d.InternalKey(), d.Value()}})...)
+	}
+	require.Equal(t, []string{"apple@305:put=gold", "cherry@303:put=dark", "date@3:put=brown"}, got)
+}
