@@ -36,7 +36,7 @@ func TestCompactMatchesOracle(t *testing.T) {
 		t.Run(fmt.Sprintf("seed%d", seed), func(t *testing.T) {
 			rng := rand.New(rand.NewPCG(seed, 9))
 			dir := t.TempDir()
-			opts := Options{MemtableThreshold: 256}
+			opts := Options{MemtableThreshold: 256, L0CompactionTrigger: -1}
 			db, err := Open(dir, opts)
 			require.NoError(t, err)
 
@@ -104,4 +104,60 @@ func TestCompactNothingToDo(t *testing.T) {
 	require.NoError(t, db.Compact())
 	require.Empty(t, db.Stats().L0)
 	require.Zero(t, countSSTs(t, dir))
+}
+
+// A scan that's halfway through when compaction runs must still finish
+// correctly: compaction may not pull tables out from under it.
+func TestCompactDuringScan(t *testing.T) {
+	db, _ := newDBWith(t, Options{MemtableThreshold: 1 << 30})
+	big := make([]byte, 1024) // ~1KB values → many blocks per table
+	want := map[string]string{}
+	for table := range 3 {
+		for i := range 20 {
+			k := fmt.Sprintf("k%d-%02d", table, i)
+			v := fmt.Sprintf("%s:%s", k, big)
+			require.NoError(t, db.Put([]byte(k), []byte(v)))
+			want[k] = v
+		}
+		forceFlush(t, db)
+	}
+	require.Len(t, db.Stats().L0, 3)
+
+	var seen []string
+	compacted := false
+	err := db.Scan(nil, nil, func(k, v []byte) bool {
+		require.Equal(t, want[string(k)], string(v))
+		seen = append(seen, string(k))
+		if !compacted {
+			compacted = true
+			require.NoError(t, db.Compact()) // pulls the rug mid-scan
+		}
+		return true
+	})
+	require.NoError(t, err, "scan must survive a compaction")
+	require.Len(t, seen, len(want), "scan must see every key")
+	require.Len(t, db.Stats().L0, 1)
+}
+
+// With the default trigger, L0 never piles up: every 4th flush folds it back
+// into one table, and the data stays right.
+func TestAutoCompactionKeepsL0Short(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(dir, Options{MemtableThreshold: 256})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	model := map[string]string{}
+	maxL0 := 0
+	for i := range 400 {
+		k := fmt.Sprintf("k%03d", i%50)
+		v := fmt.Sprintf("v%d", i)
+		require.NoError(t, db.Put([]byte(k), []byte(v)))
+		model[k] = v
+		maxL0 = max(maxL0, len(db.Stats().L0))
+	}
+	require.Less(t, maxL0, l0CompactionTrigger, "a write never returns with L0 at the trigger")
+	require.Equal(t, len(db.Stats().L0), countSSTs(t, dir), "no stray files on disk")
+	require.Equal(t, oracleRange(model, "", ""), scanAll(t, db, "", ""))
+	requireGets(t, db, model, 50, "auto")
 }

@@ -64,7 +64,15 @@ func (d *DBIter) fail(err error) {
 	d.err = err
 }
 
-func (d *DBIter) Error() error { return d.err }
+func (d *DBIter) Error() error {
+	if d.err != nil {
+		return d.err
+	}
+	if e, ok := d.it.(interface{ Error() error }); ok {
+		return e.Error()
+	}
+	return nil
+}
 
 func (d *DBIter) skipUserKey(uk []byte) {
 	for d.it.Valid() {

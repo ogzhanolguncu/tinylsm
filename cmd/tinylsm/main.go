@@ -48,7 +48,6 @@ type shell struct {
 	dir     string
 	opts    tinylsm.Options
 	db      *tinylsm.DB
-	flushes int
 	recent  map[string]string // last writes, in case of `crash`
 	order   []string
 	benches []benchRun
@@ -58,9 +57,12 @@ type shell struct {
 func main() {
 	dir := flag.String("dir", "./data", "database directory")
 	threshold := flag.Uint64("threshold", 16*1024, "memtable bytes before a flush")
+	trigger := flag.Int("trigger", 0, "auto-compact when L0 reaches this many tables (0 = engine default 4, -1 = never: watch L0 pile up)")
+	noSync := flag.Bool("nosync", false, "skip the WAL fsync on every write (fast; survives kill -9, not power loss)")
 	flag.Parse()
 
-	sh := &shell{dir: *dir, opts: tinylsm.Options{MemtableThreshold: *threshold}, recent: map[string]string{}}
+	opts := tinylsm.Options{MemtableThreshold: *threshold, L0CompactionTrigger: *trigger, NoSync: *noSync}
+	sh := &shell{dir: *dir, opts: opts, recent: map[string]string{}}
 	banner()
 	sh.open()
 	sh.keyMax = sh.probeKeyMax()
@@ -146,7 +148,7 @@ func (sh *shell) run(args []string) bool {
 			sh.scan(nil, nil, intArg(rest, 30))
 		}
 	case "compact":
-		locked("compact", "Phase 8 — compaction")
+		sh.compact()
 	case "help", "?":
 		help()
 	case "exit", "quit", "q":
@@ -159,7 +161,7 @@ func (sh *shell) run(args []string) bool {
 }
 
 func (sh *shell) put(k, v string) {
-	before := len(sh.db.Stats().L0)
+	before := sh.db.Stats()
 	start := time.Now()
 	if err := sh.db.Put([]byte(k), []byte(v)); err != nil {
 		fmt.Printf("%serror:%s %v\n", red, reset, err)
@@ -167,7 +169,7 @@ func (sh *shell) put(k, v string) {
 	}
 	sh.remember(k, v)
 	fmt.Printf("%sok%s %s%s%s\n", green, reset, dim, time.Since(start).Round(time.Microsecond), reset)
-	sh.announceFlushes(before)
+	sh.announce(before)
 }
 
 func (sh *shell) get(k string) {
@@ -185,27 +187,57 @@ func (sh *shell) get(k string) {
 }
 
 func (sh *shell) del(k string) {
-	before := len(sh.db.Stats().L0)
+	before := sh.db.Stats()
 	if err := sh.db.Delete([]byte(k)); err != nil {
 		fmt.Printf("%serror:%s %v\n", red, reset, err)
 		return
 	}
 	sh.remember(k, "")
 	fmt.Printf("%s🪦 tombstone written%s for %s\n", dim, reset, k)
-	sh.announceFlushes(before)
+	sh.announce(before)
 }
 
-func (sh *shell) announceFlushes(before int) {
+// announce reports what a single write set off: a flush, maybe a compaction.
+func (sh *shell) announce(before tinylsm.Stats) {
 	s := sh.db.Stats()
-	for _, t := range s.L0[before:] {
-		sh.flushes++
-		fmt.Printf("  %s⚡ FLUSH%s memtable → %s%09d.sst%s (%s)  L0 now has %d tables\n",
-			yellow, reset, bold, t.FileNum, reset, size(t.Bytes), len(s.L0))
+	if s.Flushes > before.Flushes {
+		fmt.Printf("  %s⚡ FLUSH%s memtable → a new L0 table\n", yellow, reset)
+	}
+	if s.Compactions > before.Compactions {
+		fmt.Printf("  %s🧹 COMPACTION%s L0 hit the trigger: %d tables folded into %d\n",
+			cyan, reset, len(before.L0)+1, len(s.L0))
+	}
+}
+
+func (sh *shell) compact() {
+	before := sh.db.Stats()
+	var beforeBytes int64
+	for _, t := range before.L0 {
+		beforeBytes += t.Bytes
+	}
+	start := time.Now()
+	if err := sh.db.Compact(); err != nil {
+		fmt.Printf("%serror:%s %v\n", red, reset, err)
+		return
+	}
+	took := time.Since(start)
+	after := sh.db.Stats()
+	var afterBytes int64
+	for _, t := range after.L0 {
+		afterBytes += t.Bytes
+	}
+	fmt.Printf("%s🧹 compacted%s %s%d tables (%s)%s → %s%d table (%s)%s in %s\n",
+		cyan, reset, bold, len(before.L0), size(beforeBytes), reset, bold, len(after.L0), size(afterBytes), reset, took.Round(time.Millisecond))
+	if beforeBytes > afterBytes {
+		fmt.Printf("  %sthrew away %s of old versions and tombstones%s\n", dim, size(beforeBytes-afterBytes), reset)
+	}
+	if len(sh.benches) > 0 {
+		fmt.Printf("  %snow run 'bench' and compare with before%s\n", yellow, reset)
 	}
 }
 
 func (sh *shell) fill(n int) {
-	before := len(sh.db.Stats().L0)
+	before := sh.db.Stats()
 	start := time.Now()
 	val := make([]byte, 100)
 	for i := range n {
@@ -218,8 +250,9 @@ func (sh *shell) fill(n int) {
 			return
 		}
 		if i%500 == 0 || i == n-1 {
-			fmt.Printf("\r  %s %d/%d  %s%d flushes%s", bar(float64(i+1)/float64(n), 30, green),
-				i+1, n, yellow, len(sh.db.Stats().L0)-before, reset)
+			s := sh.db.Stats()
+			fmt.Printf("\r  %s %d/%d  %s%d flushes%s  %s%d compactions%s  L0: %d   ", bar(float64(i+1)/float64(n), 30, green),
+				i+1, n, yellow, s.Flushes-before.Flushes, reset, cyan, s.Compactions-before.Compactions, reset, len(s.L0))
 		}
 		if n-i <= 5 {
 			sh.remember(k, string(val))
@@ -227,17 +260,17 @@ func (sh *shell) fill(n int) {
 	}
 	sh.keyMax += n
 	took := time.Since(start)
-	after := len(sh.db.Stats().L0)
-	sh.flushes += after - before
-	fmt.Printf("\n%s✓ %d puts%s in %s → %s%.0f ops/s%s, %d new sstables (L0: %d)\n",
-		green, n, reset, took.Round(time.Millisecond), bold, float64(n)/took.Seconds(), reset, after-before, after)
-	sh.milestones(after)
+	after := sh.db.Stats()
+	fmt.Printf("\n%s✓ %d puts%s in %s → %s%.0f ops/s%s, %d flushes, %d compactions (L0: %d)\n",
+		green, n, reset, took.Round(time.Millisecond), bold, float64(n)/took.Seconds(), reset,
+		after.Flushes-before.Flushes, after.Compactions-before.Compactions, len(after.L0))
+	sh.milestones(len(after.L0))
 }
 
 func (sh *shell) milestones(tables int) {
 	switch {
 	case tables >= 100:
-		fmt.Printf("  %s🔥 %d tables in L0. Every miss reads all of them. This is the pain compaction (Phase 8) kills.%s\n", red, tables, reset)
+		fmt.Printf("  %s🔥 %d tables in L0. Every miss reads all of them. Run 'bench', then 'compact', then 'bench' again.%s\n", red, tables, reset)
 	case tables >= 20:
 		fmt.Printf("  %s👀 L0 is getting tall. Try 'bench' and watch reads slow down.%s\n", yellow, reset)
 	}
@@ -264,7 +297,7 @@ func (sh *shell) bench(n int) {
 		miss += time.Since(start)
 	}
 	avgHit, avgMiss := hit/time.Duration(n), miss/time.Duration(n)
-	fmt.Printf("  hit  avg %s%s%s\n  miss avg %s%s%s  %s(a miss must check every one of %d tables)%s\n",
+	fmt.Printf("  hit  avg %s%s%s\n  miss avg %s%s%s  %s(%d tables; bloom filters let a miss skip nearly all of them)%s\n",
 		bold, avgHit.Round(time.Nanosecond*100), reset, bold, avgMiss.Round(time.Nanosecond*100), reset, dim, tables, reset)
 
 	sh.benches = append(sh.benches, benchRun{tables: tables, avg: avgMiss})
@@ -349,8 +382,8 @@ func (sh *shell) stats() {
 	for _, t := range s.L0 {
 		total += t.Bytes
 	}
-	fmt.Printf("  %sL0%s       %d tables, %s   %sseq %d · next file %d · %d flushes this session%s\n",
-		bold, reset, len(s.L0), size(total), dim, s.NextSeq, s.NextFileNum, sh.flushes, reset)
+	fmt.Printf("  %sL0%s       %d tables, %s   %sseq %d · next file %d · %d flushes, %d compactions this session%s\n",
+		bold, reset, len(s.L0), size(total), dim, s.NextSeq, s.NextFileNum, s.Flushes, s.Compactions, reset)
 
 	// newest on top: that's the order Get searches them
 	const shown = 8
@@ -360,9 +393,6 @@ func (sh *shell) stats() {
 	}
 	if len(s.L0) > shown {
 		fmt.Printf("           %s┃ … %d more%s\n", dim, len(s.L0)-shown, reset)
-	}
-	for _, lvl := range []string{"L1", "L2"} {
-		fmt.Printf("  %s%s       🔒 empty until Phase 8%s\n", dim, lvl, reset)
 	}
 	fmt.Println()
 }
@@ -469,13 +499,9 @@ func help() {
   %sscan%s [n]       live keys, newest value each, in order
   %sscan%s <a> <b>    live keys from a up to (not incl.) b, e.g. scan oz: oz;
   %sscan --raw%s [n]  every version + tombstone, merged across all tables
-  %scompact          🔒 locked — Phase 8%s
+  %scompact%s         fold every L0 table into one (auto at 4 unless -trigger says otherwise)
 
-`, cyan, reset, cyan, reset, cyan, reset, cyan, reset, cyan, reset, cyan, reset, red, reset, yellow, reset, cyan, reset, cyan, reset, cyan, reset, cyan, reset, dim, reset)
-}
-
-func locked(cmd, phase string) {
-	fmt.Printf("%s🔒 '%s' is locked.%s Build %s%s%s to unlock it.\n", dim, cmd, reset, bold, phase, reset)
+`, cyan, reset, cyan, reset, cyan, reset, cyan, reset, cyan, reset, cyan, reset, red, reset, yellow, reset, cyan, reset, cyan, reset, cyan, reset, cyan, reset, cyan, reset)
 }
 
 func usage(u string) bool {

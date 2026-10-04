@@ -15,6 +15,10 @@ type Writer struct {
 	f    *os.File
 	path string
 	err  error
+	// NoSync skips the fsync after each Append. The record still reaches the
+	// OS, so it survives the process dying (kill -9), but not the machine
+	// dying (power loss, kernel panic) before the OS writes it out.
+	NoSync bool
 }
 
 func NewWriter(path string) (*Writer, error) {
@@ -62,6 +66,9 @@ func (w *Writer) Append(e Entry) error {
 	}
 	if n < len(enc) {
 		return fail(io.ErrShortWrite)
+	}
+	if w.NoSync {
+		return nil
 	}
 	if err := w.f.Sync(); err != nil {
 		return fail(fmt.Errorf("fsync wal (not durable): %w", err))

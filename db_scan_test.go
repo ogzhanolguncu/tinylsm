@@ -47,7 +47,7 @@ func TestScanMatchesOracleAcrossFlushes(t *testing.T) {
 		t.Run(fmt.Sprintf("seed%d", seed), func(t *testing.T) {
 			rng := rand.New(rand.NewPCG(seed, 7))
 			dir := t.TempDir()
-			opts := Options{MemtableThreshold: 256}
+			opts := Options{MemtableThreshold: 256, L0CompactionTrigger: -1}
 			db, err := Open(dir, opts)
 			require.NoError(t, err)
 

@@ -145,6 +145,20 @@ func (mt *Memtable) mutate(key, val []byte, kind wal.Kind, seq uint64) error {
 	return nil
 }
 
+// SetNoSync turns the per-write WAL fsync off (or back on). See wal.Writer.NoSync.
+func (mt *Memtable) SetNoSync(v bool) {
+	mt.mu.Lock()
+	defer mt.mu.Unlock()
+	mt.writer.NoSync = v
+}
+
+// NoSync reports whether the WAL skips fsync.
+func (mt *Memtable) NoSync() bool {
+	mt.mu.Lock()
+	defer mt.mu.Unlock()
+	return mt.writer.NoSync
+}
+
 func (mt *Memtable) Path() string {
 	return mt.writer.Path()
 }

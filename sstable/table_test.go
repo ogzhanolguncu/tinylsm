@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ogzhanolguncu/tinylsm/bloom"
 	"github.com/ogzhanolguncu/tinylsm/keys"
 	"github.com/stretchr/testify/require"
 )
@@ -23,7 +24,7 @@ func parseTable(t *testing.T, path string) (idx []indexEntry, raw []byte, indexO
 	require.Greater(t, uint64(len(raw)), footerSize)
 
 	footer := raw[uint64(len(raw))-footerSize:]
-	require.Equal(t, []byte("OzLSM\x00\x00\x02"), footer[24:32], "magic")
+	require.Equal(t, []byte("OzLSM\x00\x00\x03"), footer[40:48], "magic")
 	indexOff = binary.LittleEndian.Uint64(footer[0:8])
 	indexSize := binary.LittleEndian.Uint64(footer[8:16])
 	require.Equal(t, uint64(len(raw)), indexOff+indexSize+footerSize, "footer must cover the file")
@@ -87,7 +88,11 @@ func TestTableWriterRoundTrip(t *testing.T) {
 				}
 				require.Equal(t, e.lastKey, lastKey, "index key %d must be its block's last key", i)
 			}
-			require.Equal(t, indexOff, nextOff, "index must start after the last data block")
+			footer := raw[uint64(len(raw))-footerSize:]
+			filterOff := binary.LittleEndian.Uint64(footer[16:24])
+			filterSize := binary.LittleEndian.Uint64(footer[24:32])
+			require.Equal(t, nextOff, filterOff, "filter must start after the last data block")
+			require.Equal(t, indexOff, filterOff+filterSize, "index must start right after the filter")
 			require.Equal(t, entries, got)
 		})
 	}
@@ -154,7 +159,7 @@ func TestOpenTableRejectsCorruption(t *testing.T) {
 			return raw[:footerSize-1]
 		}, ErrBlockCorrupt},
 		{"bad magic", func(raw []byte) []byte {
-			footerAt(raw)[31] ^= 0xff
+			footerAt(raw)[47] ^= 0xff
 			return raw
 		}, ErrBadMagic},
 		{"indexSize overruns file", func(raw []byte) []byte {
@@ -408,4 +413,53 @@ func TestOpenTableRejectsIndexHandlePointingAtDataBlock(t *testing.T) {
 	tbl, err := Open(bad)
 	require.ErrorIs(t, err, ErrBlockCorrupt)
 	require.Nil(t, tbl)
+}
+
+// The filter is what lets Get skip a table. It must never skip one that holds
+// the key (every written key, every version, is still found), and for keys
+// that aren't there it should skip almost always.
+func TestTableBloomFilter(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName(9))
+	tw, err := NewWriter(path)
+	require.NoError(t, err)
+	for i := range 500 {
+		k := fmt.Sprintf("key%04d", i)
+		require.NoError(t, tw.Add(ik(t, k, uint64(2*i+1), keys.KindPut), []byte("new")))
+		require.NoError(t, tw.Add(ik(t, k, uint64(2*i), keys.KindPut), []byte("old")))
+	}
+	require.NoError(t, tw.Finish())
+	tbl, err := Open(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tbl.Close() })
+
+	for i := range 500 {
+		val, state, err := tbl.Get(ik(t, fmt.Sprintf("key%04d", i), keys.MaxSeq, keys.KindPut))
+		require.NoError(t, err)
+		require.Equal(t, keys.Found, state)
+		require.Equal(t, "new", string(val))
+	}
+
+	maybe := 0
+	for i := range 10_000 {
+		if bloom.MayContain(tbl.filter, fmt.Appendf(nil, "absent%05d", i)) {
+			maybe++
+		}
+	}
+	require.Less(t, maybe, 200, "≈1%% false positives expected, got %d/10000", maybe)
+}
+
+// A flipped bit in the filter could turn "maybe" into "no" and hide real data,
+// so the filter is checksummed: damage must fail Open, not shrink the table.
+func TestCorruptFilterIsRejected(t *testing.T) {
+	golden := filepath.Join(t.TempDir(), FileName(1))
+	writeTable(t, golden, 40)
+	raw, err := os.ReadFile(golden)
+	require.NoError(t, err)
+	filterOff := binary.LittleEndian.Uint64(raw[uint64(len(raw))-footerSize:][16:24])
+	raw[filterOff] ^= 0x01
+
+	bad := filepath.Join(t.TempDir(), FileName(2))
+	require.NoError(t, os.WriteFile(bad, raw, 0o644))
+	_, err = Open(bad)
+	require.ErrorIs(t, err, ErrBlockChecksum)
 }

@@ -80,9 +80,12 @@ func (db *DB) compact() error {
 	db.version = db.version.Apply(edit)
 	old := db.l0
 	db.l0 = newL0
+	db.compactions++
 
+	// Deleting an open file is fine on unix: a scan that pinned an old table
+	// keeps reading it, and its last Unref closes it.
 	for _, t := range old {
-		_ = t.Close()
+		_ = t.Unref()
 	}
 	for _, f := range edit.DelFiles {
 		_ = os.Remove(filepath.Join(db.dir, sstable.FileName(f.FileNum)))

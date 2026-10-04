@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ogzhanolguncu/tinylsm/keys"
 	"github.com/stretchr/testify/require"
 )
 
@@ -46,7 +45,7 @@ func fill(t *testing.T, db *DB, prefix string, n int) {
 }
 
 func TestFlushProducesAnSSTable(t *testing.T) {
-	db, dir := newDBWith(t, Options{MemtableThreshold: tinyThreshold})
+	db, dir := newDBWith(t, Options{MemtableThreshold: tinyThreshold, L0CompactionTrigger: -1})
 
 	require.Equal(t, 0, countSSTs(t, dir), "nothing flushed before the threshold is crossed")
 
@@ -58,7 +57,7 @@ func TestFlushProducesAnSSTable(t *testing.T) {
 // Repeated crossings must each cut their own file. One file means freeze is
 // reusing the same memtable or the same file number.
 func TestRepeatedFlushesProduceDistinctFiles(t *testing.T) {
-	db, dir := newDBWith(t, Options{MemtableThreshold: tinyThreshold})
+	db, dir := newDBWith(t, Options{MemtableThreshold: tinyThreshold, L0CompactionTrigger: -1})
 
 	fill(t, db, "a", 20)
 	first := countSSTs(t, dir)
@@ -70,7 +69,7 @@ func TestRepeatedFlushesProduceDistinctFiles(t *testing.T) {
 
 // A flushed memtable's WAL is dead weight: the SSTable owns that data now.
 func TestFlushDropsTheOldWAL(t *testing.T) {
-	db, dir := newDBWith(t, Options{MemtableThreshold: tinyThreshold})
+	db, dir := newDBWith(t, Options{MemtableThreshold: tinyThreshold, L0CompactionTrigger: -1})
 
 	fill(t, db, "k", 20)
 
@@ -81,7 +80,7 @@ func TestFlushDropsTheOldWAL(t *testing.T) {
 // boundary. Searching L0 oldest-first, or searching L0 before the memtable,
 // returns "v1" here.
 func TestOverwriteAcrossAFlushBoundary(t *testing.T) {
-	db, dir := newDBWith(t, Options{MemtableThreshold: tinyThreshold})
+	db, dir := newDBWith(t, Options{MemtableThreshold: tinyThreshold, L0CompactionTrigger: -1})
 
 	require.NoError(t, db.Put([]byte("cat"), []byte("v1")))
 	fill(t, db, "pad", 20)
@@ -97,7 +96,7 @@ func TestOverwriteAcrossAFlushBoundary(t *testing.T) {
 
 // Same bug, one level deeper: both versions are on disk, in different tables.
 func TestOverwriteAcrossTwoFlushBoundaries(t *testing.T) {
-	db, dir := newDBWith(t, Options{MemtableThreshold: tinyThreshold})
+	db, dir := newDBWith(t, Options{MemtableThreshold: tinyThreshold, L0CompactionTrigger: -1})
 
 	require.NoError(t, db.Put([]byte("cat"), []byte("v1")))
 	fill(t, db, "pad", 20)
@@ -117,7 +116,7 @@ func TestOverwriteAcrossTwoFlushBoundaries(t *testing.T) {
 // only in an SSTable. The read path has to stop at the first hit, not keep
 // looking until it finds a PUT.
 func TestTombstoneInMemtableShadowsAnSSTableValue(t *testing.T) {
-	db, dir := newDBWith(t, Options{MemtableThreshold: tinyThreshold})
+	db, dir := newDBWith(t, Options{MemtableThreshold: tinyThreshold, L0CompactionTrigger: -1})
 
 	require.NoError(t, db.Put([]byte("cat"), []byte("purr")))
 	fill(t, db, "pad", 20)
@@ -133,7 +132,7 @@ func TestTombstoneInMemtableShadowsAnSSTableValue(t *testing.T) {
 // The tombstone itself gets flushed. It must keep shadowing the older value in
 // the older table — deletes are not garbage until compaction says so.
 func TestTombstoneSurvivesItsOwnFlush(t *testing.T) {
-	db, dir := newDBWith(t, Options{MemtableThreshold: tinyThreshold})
+	db, dir := newDBWith(t, Options{MemtableThreshold: tinyThreshold, L0CompactionTrigger: -1})
 
 	require.NoError(t, db.Put([]byte("cat"), []byte("purr")))
 	fill(t, db, "pad", 20)
@@ -150,7 +149,7 @@ func TestTombstoneSurvivesItsOwnFlush(t *testing.T) {
 // Resurrection after a flushed tombstone: PUT > DELETE > PUT spread over three
 // tables. Wrong ordering here reads as "still deleted".
 func TestPutAfterAFlushedTombstone(t *testing.T) {
-	db, _ := newDBWith(t, Options{MemtableThreshold: tinyThreshold})
+	db, _ := newDBWith(t, Options{MemtableThreshold: tinyThreshold, L0CompactionTrigger: -1})
 
 	require.NoError(t, db.Put([]byte("cat"), []byte("purr")))
 	fill(t, db, "pad", 20)
@@ -167,7 +166,7 @@ func TestPutAfterAFlushedTombstone(t *testing.T) {
 // Everything above, re-read by a fresh DB. Reopen has to load the tables in an
 // order that preserves the same answers — and recover a seq past all of them.
 func TestReopenPreservesFlushOrdering(t *testing.T) {
-	db, dir := newDBWith(t, Options{MemtableThreshold: tinyThreshold})
+	db, dir := newDBWith(t, Options{MemtableThreshold: tinyThreshold, L0CompactionTrigger: -1})
 
 	require.NoError(t, db.Put([]byte("cat"), []byte("v1")))
 	require.NoError(t, db.Put([]byte("dog"), []byte("woof")))
@@ -177,7 +176,7 @@ func TestReopenPreservesFlushOrdering(t *testing.T) {
 	fill(t, db, "qad", 20)
 	require.NoError(t, db.Close())
 
-	db2, err := Open(dir, Options{MemtableThreshold: tinyThreshold})
+	db2, err := Open(dir, Options{MemtableThreshold: tinyThreshold, L0CompactionTrigger: -1})
 	require.NoError(t, err)
 	defer db2.Close()
 
@@ -201,7 +200,7 @@ func TestReopenPreservesFlushOrdering(t *testing.T) {
 // Keys that were only ever written before a flush are still readable; the pad
 // keys are the bulk of what got flushed.
 func TestFlushedKeysStayReadable(t *testing.T) {
-	db, dir := newDBWith(t, Options{MemtableThreshold: tinyThreshold})
+	db, dir := newDBWith(t, Options{MemtableThreshold: tinyThreshold, L0CompactionTrigger: -1})
 
 	fill(t, db, "pad", 20)
 	require.Greater(t, countSSTs(t, dir), 0)
@@ -227,16 +226,15 @@ func TestZeroThresholdUsesTheDefault(t *testing.T) {
 // Close must release every L0 table, not just the memtable. A closed table's
 // fd is gone, so any read through it has to fail.
 func TestCloseReleasesL0Tables(t *testing.T) {
-	db, _ := newDBWith(t, Options{MemtableThreshold: tinyThreshold})
+	db, _ := newDBWith(t, Options{MemtableThreshold: tinyThreshold, L0CompactionTrigger: -1})
 	fill(t, db, "k", 20)
 	require.NotEmpty(t, db.l0)
 
 	require.NoError(t, db.Close())
 
-	ik, err := keys.Encode([]byte("k000"), keys.MaxSeq, keys.KindPut)
-	require.NoError(t, err)
+	// Not via Get: the bloom filter answers most lookups without touching
+	// the file, so a Get can succeed on a closed table.
 	for _, tbl := range db.l0 {
-		_, _, err := tbl.Get(ik)
-		require.ErrorIs(t, err, os.ErrClosed)
+		require.ErrorIs(t, tbl.Close(), os.ErrClosed, "Close must have released every table")
 	}
 }

@@ -299,3 +299,26 @@ func TestOpenDeletesOrphanSSTables(t *testing.T) {
 	require.NoError(t, db.Close())
 	require.NoFileExists(t, orphan)
 }
+
+// NoSync trades power-loss durability for speed, but a write must still reach
+// the WAL: a clean reopen (no flush ever happened) has to see it.
+func TestNoSyncWritesStillReachTheWAL(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(dir, Options{NoSync: true, MemtableThreshold: tinyThreshold})
+	require.NoError(t, err)
+	require.NoError(t, db.Put([]byte("k"), []byte("v")))
+	first := db.mem
+	require.True(t, db.mem.NoSync(), "option must reach the live WAL writer")
+	fill(t, db, "pad", 20)
+	require.NotSame(t, first, db.mem, "the fill must have frozen the memtable")
+	require.True(t, db.mem.NoSync(), "and every memtable after a freeze")
+	require.NoError(t, db.Close())
+
+	db, err = Open(dir, Options{})
+	require.NoError(t, err)
+	defer db.Close()
+	val, found, err := db.Get([]byte("k"))
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, "v", string(val))
+}

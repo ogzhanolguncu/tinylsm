@@ -22,12 +22,22 @@ var ErrUnknownFileName = errors.New("tinylsm: unknown file name")
 
 // maxSize when we hit that threshold we'll freeze this and write it out to a SSTable
 const (
-	memBytesMax  = 1024 * 1024 * 4
-	skiplistSeed = 1
+	memBytesMax = 1024 * 1024 * 4
+	// l0CompactionTrigger is LevelDB's kL0_CompactionTrigger.
+	l0CompactionTrigger = 4
+	skiplistSeed        = 1
 )
 
 type Options struct {
 	MemtableThreshold uint64
+	// NoSync skips the WAL fsync on every write: far faster, and a write
+	// still survives the process crashing, but the last writes can be lost if
+	// the machine itself goes down. LevelDB's default; tinylsm's is to sync.
+	NoSync bool
+	// L0CompactionTrigger: once a flush leaves this many L0 tables, compact
+	// them into one before the write returns. 0 means 4 (LevelDB's number);
+	// negative turns auto-compaction off.
+	L0CompactionTrigger int
 }
 
 type DB struct {
@@ -41,11 +51,16 @@ type DB struct {
 	opts        Options
 	manifest    *manifest.Writer
 	version     *manifest.Version
+	// flushes and compactions since Open, for Stats.
+	flushes, compactions int
 }
 
 func Open(dir string, opts Options) (*DB, error) {
 	if opts.MemtableThreshold == 0 {
 		opts.MemtableThreshold = memBytesMax
+	}
+	if opts.L0CompactionTrigger == 0 {
+		opts.L0CompactionTrigger = l0CompactionTrigger
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
@@ -195,6 +210,7 @@ func Open(dir string, opts Options) (*DB, error) {
 		version:     version,
 		manifest:    mw,
 	}
+	db.mem.SetNoSync(opts.NoSync)
 
 	for i, mt := range stale {
 		if mt.ApproxSize() == 0 {
@@ -249,7 +265,12 @@ func (db *DB) makeRoomForWriter() error {
 		if err := db.freeze(); err != nil {
 			return err
 		}
-		return db.flush()
+		if err := db.flush(); err != nil {
+			return err
+		}
+		if t := db.opts.L0CompactionTrigger; t > 0 && len(db.l0) >= t {
+			return db.compact()
+		}
 	}
 	return nil
 }
@@ -323,6 +344,7 @@ func (db *DB) flush() error {
 	}
 	db.version = db.version.Apply(versionEdit)
 	db.l0 = append(db.l0, sst)
+	db.flushes++
 
 	_ = db.imm.Close()
 	_ = os.Remove(db.imm.Path())
@@ -338,6 +360,7 @@ func (db *DB) freeze() error {
 	if err != nil {
 		return err
 	}
+	mem.SetNoSync(db.opts.NoSync)
 	db.imm = db.mem
 	db.mem = mem
 	return nil

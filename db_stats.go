@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/ogzhanolguncu/tinylsm/merge"
 	"github.com/ogzhanolguncu/tinylsm/sstable"
@@ -20,6 +21,8 @@ type Stats struct {
 	L0           []TableStats
 	NextSeq      uint64
 	NextFileNum  uint64
+	Flushes      int // since Open
+	Compactions  int // since Open
 }
 
 // Stats is a read-only snapshot for tooling (the REPL); it plays no part in the engine.
@@ -32,6 +35,8 @@ func (db *DB) Stats() Stats {
 		MemThreshold: db.opts.MemtableThreshold,
 		NextSeq:      db.nextSeq,
 		NextFileNum:  db.nextFileNum,
+		Flushes:      db.flushes,
+		Compactions:  db.compactions,
 	}
 	for _, f := range db.version.Files[0] {
 		ts := TableStats{FileNum: f.FileNum}
@@ -50,7 +55,9 @@ func (db *DB) RawScan(fn func(internalKey, val []byte) bool) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
-	m := merge.New(db.children())
+	children, release := db.children()
+	defer release()
+	m := merge.New(children)
 	for m.SeekToFirst(); m.Valid(); m.Next() {
 		if !fn(m.Key(), m.Value()) {
 			return
@@ -66,8 +73,10 @@ func (db *DB) RawScan(fn func(internalKey, val []byte) bool) {
 // Not yet safe against tables being deleted mid-scan: Phase 8 problem.
 func (db *DB) Scan(from, to []byte, fn func(key, val []byte) bool) error {
 	db.mu.RLock()
-	children, snapshot := db.children(), db.nextSeq
+	children, release := db.children()
+	snapshot := db.nextSeq
 	db.mu.RUnlock()
+	defer release()
 
 	d := merge.NewDBIter(merge.New(children), snapshot)
 	for d.Seek(from); d.Valid(); d.Next() {
@@ -81,13 +90,21 @@ func (db *DB) Scan(from, to []byte, fn func(key, val []byte) bool) error {
 	return d.Error()
 }
 
-func (db *DB) children() []merge.Iterator {
+// children returns an iterator per data source and pins every table so a
+// compaction can't close it mid-read. Call release when done. Caller holds db.mu.
+func (db *DB) children() ([]merge.Iterator, func()) {
 	children := []merge.Iterator{db.mem.NewIterator()}
 	if db.imm != nil {
 		children = append(children, db.imm.NewIterator())
 	}
-	for _, t := range db.l0 {
+	pinned := slices.Clone(db.l0)
+	for _, t := range pinned {
+		t.Ref()
 		children = append(children, t.NewIterator())
 	}
-	return children
+	return children, func() {
+		for _, t := range pinned {
+			_ = t.Unref()
+		}
+	}
 }

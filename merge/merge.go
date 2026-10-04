@@ -65,5 +65,19 @@ func (m *Merger) Next()         { m.current.Next(); m.findSmallest() }
 func (m *Merger) Key() []byte   { return m.current.Key() }
 func (m *Merger) Value() []byte { return m.current.Value() }
 
+// Error reports the first child that stopped on an error. A child that fails
+// just goes !Valid, which looks exactly like running out of data, so callers
+// must check this after the loop or a broken table silently shortens a scan.
+func (m *Merger) Error() error {
+	for _, c := range m.children {
+		if e, ok := c.(interface{ Error() error }); ok {
+			if err := e.Error(); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // compile-time check: a Merger is itself an Iterator, so mergers can nest.
 var _ Iterator = (*Merger)(nil)

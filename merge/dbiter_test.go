@@ -1,6 +1,7 @@
 package merge
 
 import (
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"slices"
@@ -141,4 +142,54 @@ func TestDBIterInternalKeyKeepsOriginalSeq(t *testing.T) {
 		got = append(got, show(t, []entry{{d.InternalKey(), d.Value()}})...)
 	}
 	require.Equal(t, []string{"apple@305:put=gold", "cherry@303:put=dark", "date@3:put=brown"}, got)
+}
+
+// errIter is a child that dies partway: Valid goes false, like a table whose
+// next block read failed.
+type errIter struct {
+	sliceIter
+	failAt int
+}
+
+func (e *errIter) Valid() bool { return e.i < e.failAt && e.sliceIter.Valid() }
+func (e *errIter) Error() error {
+	if e.i >= e.failAt {
+		return errors.New("disk on fire")
+	}
+	return nil
+}
+
+// A child that fails mid-stream must not look like a short table.
+func TestDBIterReportsChildError(t *testing.T) {
+	bad := &errIter{failAt: 1, sliceIter: sliceIter{es: []entry{
+		{ik(t, "a", 1, keys.KindPut), []byte("x")},
+		{ik(t, "b", 2, keys.KindPut), []byte("y")},
+	}}}
+	d := NewDBIter(New([]Iterator{bad}), keys.MaxSeq)
+	require.Equal(t, []string{"a=x"}, drainLive(d))
+	require.EqualError(t, d.Error(), "disk on fire")
+}
+
+func liveFrom(d *DBIter, userKey string) []string {
+	var out []string
+	for d.Seek([]byte(userKey)); d.Valid(); d.Next() {
+		out = append(out, fmt.Sprintf("%s=%s", d.Key(), d.Value()))
+	}
+	return out
+}
+
+// The REPL data again: apple(3 versions), banana(deleted), cherry.
+func replData(t *testing.T) *DBIter {
+	mem := &sliceIter{es: []entry{
+		{ik(t, "apple", 305, keys.KindPut), []byte("gold")},
+		{ik(t, "banana", 304, keys.KindDelete), nil},
+		{ik(t, "cherry", 303, keys.KindPut), []byte("dark")},
+	}}
+	sst := &sliceIter{es: []entry{
+		{ik(t, "apple", 2, keys.KindPut), []byte("green")},
+		{ik(t, "apple", 0, keys.KindPut), []byte("red")},
+		{ik(t, "banana", 1, keys.KindPut), []byte("yellow")},
+		{ik(t, "date", 3, keys.KindPut), []byte("brown")},
+	}}
+	return NewDBIter(New([]Iterator{mem, sst}), keys.MaxSeq)
 }
