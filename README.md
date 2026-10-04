@@ -4,11 +4,11 @@ LSM-tree KV store written in Go for educational purposes. This one is some sort 
 
 Scans are snapshots and don't block writers. `Scan` holds the lock just long enough to grab its iterators and the current seq, then anything written later is skipped. Overwrites and deletes that land mid-scan don't leak into it.
 
-Compaction can run mid-scan. Tables are reference counted, so a scan keeps the files it's reading alive, and the last reader closes them. Iterator errors propagate too, so a broken table fails the scan instead of silently cutting it short.
+Compaction can run mid-scan. Tables are reference counted, so a scan keeps the files it's reading alive, and the last reader closes them. Iterator errors propagate too.
 
-Crashing during a flush or compaction is safe. The MANIFEST edit is the commit point, and any file it doesn't list is cleaned up on open.
+Crashing during a flush or compaction is safe.
 
-A torn tail in the WAL or MANIFEST is truncated back to the last good record. Corruption anywhere else refuses to open instead of guessing.
+A torn tail in the WAL or MANIFEST is truncated back to the last good record.
 
 Bloom filters and an L0 compaction trigger at 4 tables keep reads cheap:
 
