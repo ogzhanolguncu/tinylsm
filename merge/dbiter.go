@@ -7,21 +7,20 @@ import (
 	"github.com/ogzhanolguncu/tinylsm/keys"
 )
 
-// DBIter is the user's view: it wraps a merged stream of internal keys and
-// yields each live user key once, with its newest value. Older versions and
-// deleted keys never come out. LevelDB calls this DBIter (db/db_iter.cc).
-//
-// Key returns the USER key (no seq, no kind), Value the newest value.
 type DBIter struct {
 	it       Iterator
 	key, val []byte
 	valid    bool
 	err      error
+	snapshot uint64 // entries with seq >= snapshot were written after the scan
 }
 
-func NewDBIter(it Iterator) *DBIter {
+// NewDBIter shows the data as of snapshot: pass the DB's next seq at the
+// moment the scan starts. keys.MaxSeq means "see everything".
+func NewDBIter(it Iterator, snapshot uint64) *DBIter {
 	return &DBIter{
-		it: it,
+		it:       it,
+		snapshot: snapshot,
 	}
 }
 
@@ -32,13 +31,19 @@ func (d *DBIter) findNextLive() {
 			return
 		}
 
-		uk, _, kind, err := keys.Decode(d.it.Key())
+		uk, seq, kind, err := keys.Decode(d.it.Key())
 		if err != nil {
 			d.fail(err)
 			return
 		}
+
+		if seq >= d.snapshot {
+			continue
+		}
+
 		switch kind {
 		case keys.KindPut:
+
 			d.key = bytes.Clone(uk)
 			d.val = bytes.Clone(d.it.Value())
 			d.valid = true
@@ -52,14 +57,11 @@ func (d *DBIter) findNextLive() {
 	}
 }
 
-// fail stops iteration for good; the caller finds out why through Error.
 func (d *DBIter) fail(err error) {
 	d.valid = false
 	d.err = err
 }
 
-// Error reports why iteration stopped early. Check it after the loop:
-// a corrupt key ends the scan, and without this it looks like the end of data.
 func (d *DBIter) Error() error { return d.err }
 
 func (d *DBIter) skipUserKey(uk []byte) {
@@ -80,3 +82,19 @@ func (d *DBIter) Next() {
 }
 func (d *DBIter) Key() []byte   { return d.key }
 func (d *DBIter) Value() []byte { return d.val }
+
+func (d *DBIter) Seek(userKey []byte) {
+	if len(userKey) == 0 {
+		d.SeekToFirst()
+		return
+	}
+	d.err = nil
+	ik, err := keys.Encode(userKey, keys.MaxSeq, keys.KindPut)
+	if err != nil {
+		d.fail(err)
+		return
+	}
+
+	d.it.Seek(ik)
+	d.findNextLive()
+}

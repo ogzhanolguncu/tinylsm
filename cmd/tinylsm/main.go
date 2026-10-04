@@ -140,8 +140,10 @@ func (sh *shell) run(args []string) bool {
 	case "scan":
 		if len(rest) > 0 && rest[0] == "--raw" {
 			sh.rawScan(intArg(rest[1:], 30))
+		} else if len(rest) >= 2 {
+			sh.scan([]byte(rest[0]), []byte(rest[1]), intArg(rest[2:], 30))
 		} else {
-			sh.scan(intArg(rest, 30))
+			sh.scan(nil, nil, intArg(rest, 30))
 		}
 	case "compact":
 		locked("compact", "Phase 8 — compaction")
@@ -311,10 +313,10 @@ func (sh *shell) rawScan(limit int) {
 		green, n, reset, len(sh.db.Stats().L0), time.Since(start).Round(time.Microsecond))
 }
 
-func (sh *shell) scan(limit int) {
+func (sh *shell) scan(from, to []byte, limit int) {
 	n := 0
 	start := time.Now()
-	err := sh.db.Scan(func(k, v []byte) bool {
+	err := sh.db.Scan(from, to, func(k, v []byte) bool {
 		if n < limit {
 			fmt.Printf("  %s%-16s%s = %s\n", bold, k, reset, preview(v))
 		}
@@ -465,10 +467,11 @@ func help() {
   %scrash%s           SIGKILL myself, then restart to verify recovery
   %sreset%s           wipe the data dir    %squit%s          close cleanly
   %sscan%s [n]       live keys, newest value each, in order
+  %sscan%s <a> <b>    live keys from a up to (not incl.) b, e.g. scan oz: oz;
   %sscan --raw%s [n]  every version + tombstone, merged across all tables
-  %sscan <a> <b>  compact   🔒 locked — Phase 7 level 3 and Phase 8%s
+  %scompact          🔒 locked — Phase 8%s
 
-`, cyan, reset, cyan, reset, cyan, reset, cyan, reset, cyan, reset, cyan, reset, red, reset, yellow, reset, cyan, reset, cyan, reset, cyan, reset, dim, reset)
+`, cyan, reset, cyan, reset, cyan, reset, cyan, reset, cyan, reset, cyan, reset, red, reset, yellow, reset, cyan, reset, cyan, reset, cyan, reset, cyan, reset, dim, reset)
 }
 
 func locked(cmd, phase string) {

@@ -47,7 +47,14 @@ func (m *Merger) SeekToFirst() {
 	}
 	m.findSmallest()
 }
-func (m *Merger) Seek(target []byte) { m.current.Seek(target) }
+
+func (m *Merger) Seek(target []byte) {
+	for _, c := range m.children {
+		c.Seek(target)
+	}
+	m.findSmallest()
+}
+
 func (m *Merger) Valid() bool {
 	if m.current == nil {
 		return false

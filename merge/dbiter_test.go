@@ -30,7 +30,7 @@ func TestDBIterREPLExample(t *testing.T) {
 		{ik(t, "apple", 0, keys.KindPut), []byte("red")},
 		{ik(t, "banana", 1, keys.KindPut), []byte("yellow")},
 	}}
-	d := NewDBIter(New([]Iterator{mem, sst}))
+	d := NewDBIter(New([]Iterator{mem, sst}), keys.MaxSeq)
 	want := []string{"apple=gold", "cherry=dark"}
 	require.Equal(t, want, drainLive(d))
 	require.Equal(t, want, drainLive(d), "SeekToFirst must rewind")
@@ -52,7 +52,7 @@ func TestDBIterTombstoneEdges(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			require.Equal(t, c.want, drainLive(NewDBIter(New([]Iterator{&sliceIter{es: c.es}}))))
+			require.Equal(t, c.want, drainLive(NewDBIter(New([]Iterator{&sliceIter{es: c.es}}), keys.MaxSeq)))
 		})
 	}
 }
@@ -93,7 +93,7 @@ func TestDBIterMatchesOracle(t *testing.T) {
 		}) {
 			want = append(want, k+"="+live[k])
 		}
-		require.Equal(t, want, drainLive(NewDBIter(New(children))), "round %d", round)
+		require.Equal(t, want, drainLive(NewDBIter(New(children), keys.MaxSeq)), "round %d", round)
 	}
 }
 
@@ -105,11 +105,31 @@ func TestDBIterCorruptKeyReportsError(t *testing.T) {
 		{ik(t, "a", 1, keys.KindPut), []byte("x")},
 		{badKind, []byte("y")},
 	}}
-	d := NewDBIter(src) // no Merger: its compare would trip on the same bytes
+	d := NewDBIter(src, keys.MaxSeq) // no Merger: its compare would trip on the same bytes
 	require.Equal(t, []string{"a=x"}, drainLive(d))
 	require.ErrorIs(t, d.Error(), keys.ErrUnknownKind)
 
 	src.es = src.es[:1]
 	drainLive(d)
 	require.NoError(t, d.Error(), "SeekToFirst starts clean")
+}
+
+// The scan started when the next seq was 10. Anything at seq >= 10 happened
+// later and must be invisible, including later deletes.
+func TestDBIterSnapshot(t *testing.T) {
+	src := &sliceIter{es: []entry{
+		{ik(t, "alice", 11, keys.KindPut), []byte("70")}, // after: hidden
+		{ik(t, "alice", 7, keys.KindPut), []byte("100")},
+		{ik(t, "bob", 12, keys.KindPut), []byte("80")}, // after: hidden
+		{ik(t, "bob", 8, keys.KindPut), []byte("50")},
+		{ik(t, "carol", 13, keys.KindDelete), nil}, // deleted after: still visible
+		{ik(t, "carol", 9, keys.KindPut), []byte("5")},
+		{ik(t, "dave", 10, keys.KindPut), []byte("1")}, // created after: invisible
+		{ik(t, "erin", 4, keys.KindDelete), nil},       // deleted before: gone
+		{ik(t, "erin", 3, keys.KindPut), []byte("9")},
+	}}
+	d := NewDBIter(New([]Iterator{src}), 10)
+	require.Equal(t, []string{"alice=100", "bob=50", "carol=5"}, drainLive(d))
+	require.Equal(t, []string{"bob=50", "carol=5"}, liveFrom(d, "b"))
+	require.Equal(t, []string{"alice=70", "bob=80", "dave=1"}, drainLive(NewDBIter(New([]Iterator{src}), keys.MaxSeq)))
 }

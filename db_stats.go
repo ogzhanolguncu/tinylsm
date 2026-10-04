@@ -1,6 +1,7 @@
 package tinylsm
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 
@@ -57,14 +58,22 @@ func (db *DB) RawScan(fn func(internalKey, val []byte) bool) {
 	}
 }
 
-// Scan walks every live user key in order with its newest value. Same
-// read-lock caveat as RawScan.
-func (db *DB) Scan(fn func(key, val []byte) bool) error {
+// Scan walks live user keys in [from, to) in order, newest value each.
+// Empty from starts at the beginning; empty to runs to the end.
+//
+// The lock is held only while grabbing the iterators, so writers never wait
+// on a scan. Writes that land mid-scan are hidden by the snapshot seq.
+// Not yet safe against tables being deleted mid-scan: Phase 8 problem.
+func (db *DB) Scan(from, to []byte, fn func(key, val []byte) bool) error {
 	db.mu.RLock()
-	defer db.mu.RUnlock()
+	children, snapshot := db.children(), db.nextSeq
+	db.mu.RUnlock()
 
-	d := merge.NewDBIter(merge.New(db.children()))
-	for d.SeekToFirst(); d.Valid(); d.Next() {
+	d := merge.NewDBIter(merge.New(children), snapshot)
+	for d.Seek(from); d.Valid(); d.Next() {
+		if len(to) > 0 && bytes.Compare(d.Key(), to) >= 0 {
+			break
+		}
 		if !fn(d.Key(), d.Value()) {
 			break
 		}
